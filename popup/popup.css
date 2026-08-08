@@ -1,0 +1,78 @@
+@property --cooldown-progress {
+    syntax: "<percentage>";
+    inherits: false;
+    initial-value: 0%;
+}
+
+:root {
+    color-scheme: light dark;
+}
+
+body {
+    margin: 0;
+    width: 240px;
+    padding: 16px;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: #1b1b1f;
+    color: #f1f1f3;
+}
+
+#start {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: 100%;
+    padding: 10px 16px;
+    border: none;
+    border-radius: 10px;
+    background: #4f7cff;
+    color: #fff;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 150ms ease, transform 100ms ease, opacity 150ms ease;
+}
+
+#start:hover:not(:disabled) {
+    background: #3f6bee;
+}
+
+#start:active:not(:disabled) {
+    transform: scale(0.98);
+}
+
+#start:disabled {
+    cursor: default;
+    opacity: 0.75;
+}
+
+/* Clock icon: a circular "pie" that fills clockwise over the cooldown
+   duration, like an ability-cooldown indicator. Hidden until active. */
+.cooldown-icon {
+    display: none;
+    width: 16px;
+    height: 16px;
+    flex: none;
+    border-radius: 50%;
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4) inset;
+    background: conic-gradient(
+        #fff var(--cooldown-progress, 0%),
+        rgba(255, 255, 255, 0.25) 0%
+    );
+}
+
+#start.cooldown .cooldown-icon {
+    display: block;
+    animation: cooldown-fill var(--cooldown-duration, 1500ms) linear forwards;
+}
+
+@keyframes cooldown-fill {
+    from {
+        --cooldown-progress: 0%;
+    }
+
+    to {
+        --cooldown-progress: 100%;
+    }
+}
