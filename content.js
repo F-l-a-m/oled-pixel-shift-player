@@ -24,6 +24,8 @@ const DEFAULTS = {
 const state = {
     video: null,
     running: false,
+    starting: false,
+    cancelStart: false,
     timerId: null,
     lastTransform: null,
     settings: DEFAULTS
@@ -211,9 +213,12 @@ function onFullscreenChange() {
 }
 
 async function start() {
-    if (state.running) {
+    if (state.running || state.starting) {
         return;
     }
+
+    state.starting = true;
+    state.cancelStart = false;
 
     findVideo();
 
@@ -232,12 +237,20 @@ async function start() {
         )
     );
 
+    if (state.cancelStart || !document.fullscreenElement) {
+        state.starting = false;
+        state.cancelStart = false;
+        console.log("[OLED] Start cancelled");
+        return;
+    }
+
     document.addEventListener(
         "fullscreenchange",
         onFullscreenChange
     );
 
     state.running = true;
+    state.starting = false;
 
     scheduleNextMove();
 
@@ -245,6 +258,12 @@ async function start() {
 }
 
 function stop() {
+    if (state.starting) {
+        // Cancel the pending start; start() will notice this
+        // once its delay finishes and bail out without activating.
+        state.cancelStart = true;
+    }
+
     if (!state.running) {
         return;
     }
