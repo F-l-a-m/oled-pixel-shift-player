@@ -1,0 +1,100 @@
+/* OLED pixel-shift drift effect.
+   Three independently-timed CSS animations (incommensurate periods)
+   continuously drift the video's position and scale. No JS-driven
+   randomness or animation loop is involved — the browser's animation
+   engine ticks this entirely on its own.
+
+   Safety margin: --oled-shift-x/-y are computed in content.js from
+   (1 - scaleMax) * 50 - safetyMarginPct, so that even in the worst
+   case (largest scale + maximum offset happening at once) the video
+   element's box never comes closer than safetyMarginPct to the
+   screen edge, on any screen size or aspect ratio. */
+
+@property --oled-x {
+    syntax: "<number>";
+    inherits: false;
+    initial-value: 0;
+}
+
+@property --oled-y {
+    syntax: "<number>";
+    inherits: false;
+    initial-value: 0;
+}
+
+@property --oled-scale {
+    syntax: "<number>";
+    inherits: false;
+    initial-value: 1;
+}
+
+video.oled-base {
+    /* Defaults; overridden per-instance by content.js from user settings. */
+    --oled-shift-x: 0vw;
+    --oled-shift-y: 0vh;
+    --oled-scale-min: 0.63;
+    --oled-scale-max: 0.70;
+    --oled-duration-x: 53s;
+    --oled-duration-y: 71s;
+    --oled-duration-scale: 97s;
+    --oled-intro-duration: 2.5s;
+
+    transform-origin: center center;
+    will-change: transform;
+
+    transform:
+        translate3d(
+            calc(var(--oled-x) * var(--oled-shift-x)),
+            calc(var(--oled-y) * var(--oled-shift-y)),
+            0
+        )
+        scale(var(--oled-scale));
+}
+
+/* One-shot intro: eases from the video's normal framing into the
+   drift path's starting point. content.js swaps this class out for
+   .oled-drift once the transition finishes, so the animation picks
+   up exactly where the transition left off — no visible jump. */
+video.oled-base.oled-intro {
+    transition:
+        --oled-x var(--oled-intro-duration) ease,
+        --oled-y var(--oled-intro-duration) ease,
+        --oled-scale var(--oled-intro-duration) ease;
+}
+
+video.oled-base.oled-drift {
+    animation-name: oled-drift-x, oled-drift-y, oled-drift-scale;
+    animation-duration: var(--oled-duration-x), var(--oled-duration-y), var(--oled-duration-scale);
+    animation-timing-function: ease-in-out;
+    animation-iteration-count: infinite;
+    animation-direction: alternate;
+    animation-play-state: running;
+}
+
+/* Paused while the underlying video is paused/ended, or the tab is hidden.
+   Toggled by content.js in response to native events — no polling. */
+video.oled-base.oled-drift.oled-video-paused,
+video.oled-base.oled-drift.oled-tab-hidden {
+    animation-play-state: paused;
+}
+
+@keyframes oled-drift-x {
+    0%   { --oled-x: -1; }
+    20%  { --oled-x: -0.3; }
+    45%  { --oled-x: 0.6; }
+    70%  { --oled-x: -0.5; }
+    100% { --oled-x: 1; }
+}
+
+@keyframes oled-drift-y {
+    0%   { --oled-y: 1; }
+    25%  { --oled-y: -0.4; }
+    50%  { --oled-y: 0.2; }
+    75%  { --oled-y: -1; }
+    100% { --oled-y: 0.5; }
+}
+
+@keyframes oled-drift-scale {
+    0%   { --oled-scale: var(--oled-scale-min); }
+    100% { --oled-scale: var(--oled-scale-max); }
+}

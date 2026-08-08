@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "OLED Pixel Shift Player",
   "version": "0.1.0",
-  "description": "Reduce OLED burn-in by randomly moving and scaling HTML5 video in fullscreen.",
+  "description": "Reduce OLED burn-in by slowly and continuously shifting HTML5 video position and scale in fullscreen.",
 
   "permissions": [
     "storage",
@@ -28,6 +28,9 @@
       ],
       "js": [
         "content.js"
+      ],
+      "css": [
+        "content.css"
       ]
     }
   ]

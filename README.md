@@ -14,10 +14,10 @@ The main idea is to use videos as background visuals (ambient videos, wallpapers
 
 During fullscreen playback the extension:
 
-- moves the video in random directions;
-- changes zoom level;
-- uses slow smooth animations;
-- waits random intervals between shifts;
+- continuously drifts the video's position and zoom level, driven entirely by CSS animations;
+- combines three independently-timed cycles (position X, position Y, scale) whose periods are deliberately incommensurate, so the combined pattern doesn't visibly repeat for hours, without relying on randomness;
+- uses slow, smooth easing throughout, with no static pauses;
+- automatically pauses the drift while the video is paused/ended or the tab is hidden;
 - restores the original state when stopped.
 
 ## Installation

@@ -2,23 +2,20 @@ const DEFAULTS = {
     scaleMin: 0.63,
     scaleMax: 0.70,
 
-    shiftFactor: 1.25,
+    // Percent of the viewport we always keep clear at the screen edges,
+    // no matter the scale/offset at any given moment (see content.css
+    // header comment for the math). This is what makes the drift safe
+    // on any screen size or aspect ratio without per-screen tuning.
+    safetyMarginPct: 3,
 
-    durationMinMs: 4000,
-    durationMaxMs: 8000,
+    durationXs: 53,
+    durationYs: 71,
+    durationScaleS: 97,
 
-    pauseMinMs: 30000,
-    pauseMaxMs: 60000,
+    introDurationMs: 2500,
+    introDelayMs: 500,
 
-    fullscreenDelayMinMs: 3000,
-    fullscreenDelayMaxMs: 6000,
-
-    easings: [
-        "ease-in-out",
-        "cubic-bezier(0.25, 0.1, 0.25, 1)",
-        "cubic-bezier(0.4, 0, 0.2, 1)",
-        "cubic-bezier(0.22, 1, 0.36, 1)"
-    ]
+    fullscreenDelayMs: 4000
 };
 
 const state = {
@@ -26,9 +23,7 @@ const state = {
     running: false,
     starting: false,
     cancelStart: false,
-    timerId: null,
-    resetTimerId: null,
-    lastTransform: null,
+    introTimerId: null,
     settings: DEFAULTS,
     originalTransform: "",
     originalTransformOrigin: "",
@@ -42,50 +37,23 @@ function findVideo() {
         throw new Error("No HTML5 video found.");
     }
 
-    if (video !== state.video) {
-        state.video = video;
-        state.originalTransform = video.style.transform;
-        state.originalTransformOrigin = video.style.transformOrigin;
+    if (video === state.video) {
+        return;
     }
-}
 
-function randomInt(min, max) {
-    return Math.floor(
-        Math.random() * (max - min + 1)
-    ) + min;
-}
+    if (state.video) {
+        unbindVideo(state.video);
+    }
 
-function randomFloat(min, max) {
-    return Math.random() * (max - min) + min;
-}
+    state.video = video;
+    state.originalTransform = video.style.transform;
+    state.originalTransformOrigin = video.style.transformOrigin;
 
-function randomItem(items) {
-    return items[
-        randomInt(0, items.length - 1)
-    ];
-}
-
-function randomPosition(maxX, maxY) {
-    const angle = Math.random() * Math.PI * 2;
-
-    const radius = Math.pow(
-        Math.random(),
-        0.25
-    );
-
-    return {
-        x: Math.round(
-            Math.cos(angle) *
-            maxX *
-            radius
-        ),
-
-        y: Math.round(
-            Math.sin(angle) *
-            maxY *
-            radius
-        )
-    };
+    // If we're already running (e.g. the site swapped the <video> element
+    // under us), immediately re-attach the drift effect to the new one.
+    if (state.running) {
+        bindVideo(video);
+    }
 }
 
 async function loadSettings() {
@@ -97,125 +65,148 @@ async function loadSettings() {
     };
 }
 
-function createRandomTransform() {
-    const maxAttempts = 30;
-    let attempts = 0;
+// Maximum safe drift amplitude, as a percent of the viewport, given the
+// worst case: scale at its largest (least shrink) and offset at its
+// maximum simultaneously. Guarantees the video element's box — and
+// therefore whatever picture is letterboxed inside it — never comes
+// closer than settings.safetyMarginPct to the screen edge.
+function computeMaxShiftPct(settings) {
+    const naturalHalfMarginPct = (1 - settings.scaleMax) * 50;
 
-    while (true) {
-        attempts++;
+    return Math.max(0, naturalHalfMarginPct - settings.safetyMarginPct);
+}
 
-        const scale = randomFloat(
-            state.settings.scaleMin,
-            state.settings.scaleMax
-        );
+function applySettingsToVideo(video, settings) {
+    const maxShiftPct = computeMaxShiftPct(settings);
 
-        const maxX = Math.round(
-            window.innerWidth *
-            (1 - scale) *
-            0.55
-        );
+    video.style.setProperty("--oled-shift-x", `${maxShiftPct}vw`);
+    video.style.setProperty("--oled-shift-y", `${maxShiftPct}vh`);
+    video.style.setProperty("--oled-scale-min", settings.scaleMin);
+    video.style.setProperty("--oled-scale-max", settings.scaleMax);
+    video.style.setProperty("--oled-duration-x", `${settings.durationXs}s`);
+    video.style.setProperty("--oled-duration-y", `${settings.durationYs}s`);
+    video.style.setProperty("--oled-duration-scale", `${settings.durationScaleS}s`);
+    video.style.setProperty("--oled-intro-duration", `${settings.introDurationMs}ms`);
+}
 
-        const maxY = Math.round(
-            window.innerHeight *
-            (1 - scale) *
-            0.55
-        );
-
-        const position = randomPosition(
-            maxX,
-            maxY
-        );
-
-        const transform = {
-            scale,
-
-            x: position.x,
-
-            y: position.y,
-
-            durationMs: randomInt(
-                state.settings.durationMinMs,
-                state.settings.durationMaxMs
-            ),
-
-            easing: randomItem(
-                state.settings.easings
-            ),
-
-            pauseMs: randomInt(
-                state.settings.pauseMinMs,
-                state.settings.pauseMaxMs
-            )
-        };
-
-        if (!state.lastTransform) {
-            state.lastTransform = transform;
-            return transform;
-        }
-
-        const distance = Math.hypot(
-            transform.x - state.lastTransform.x,
-            transform.y - state.lastTransform.y
-        );
-
-        const scaleDifference = Math.abs(
-            transform.scale -
-            state.lastTransform.scale
-        );
-
-        if (
-            distance > 500 ||
-            scaleDifference > 0.05 ||
-            attempts >= maxAttempts
-        ) {
-            state.lastTransform = transform;
-            return transform;
-        }
+function onVideoPause() {
+    if (state.video) {
+        state.video.classList.add("oled-video-paused");
     }
 }
 
-function applyTransform(transform) {
-    state.video.style.willChange = "transform";
-
-    state.video.style.transition =
-        `transform ${transform.durationMs}ms ${transform.easing}`;
-
-    state.video.style.transformOrigin =
-        "center center";
-
-    state.video.style.transform =
-        `translate3d(${transform.x}px, ${transform.y}px, 0) scale(${transform.scale})`;
+function onVideoPlay() {
+    if (state.video) {
+        state.video.classList.remove("oled-video-paused");
+    }
 }
 
-function scheduleNextMove() {
-    if (!state.running) {
-        return;
+function attachVideoListeners(video) {
+    video.addEventListener("pause", onVideoPause);
+    video.addEventListener("ended", onVideoPause);
+    video.addEventListener("play", onVideoPlay);
+    video.addEventListener("playing", onVideoPlay);
+}
+
+function detachVideoListeners(video) {
+    video.removeEventListener("pause", onVideoPause);
+    video.removeEventListener("ended", onVideoPause);
+    video.removeEventListener("play", onVideoPlay);
+    video.removeEventListener("playing", onVideoPlay);
+}
+
+function resetVideoStyles(video) {
+    // Unconditionally clear anything a prior run might have left inline —
+    // transition/transform/willChange/transformOrigin — regardless of
+    // how that run ended. This is what makes every start() deterministic:
+    // bindVideo() never trusts prior state, it enforces a clean slate.
+    video.style.transition = "none";
+    video.style.transform = "";
+    video.style.transformOrigin = "";
+    video.style.willChange = "";
+    video.style.removeProperty("--oled-x");
+    video.style.removeProperty("--oled-y");
+    video.style.removeProperty("--oled-scale");
+
+    // Force a reflow so the "none" transition above is committed before
+    // .oled-intro's transition rule gets armed right after this call —
+    // otherwise the browser could coalesce this reset with the very
+    // first property change and skip animating it.
+    void video.offsetWidth;
+}
+
+function bindVideo(video) {
+    resetVideoStyles(video);
+
+    applySettingsToVideo(video, state.settings);
+    attachVideoListeners(video);
+
+    video.classList.add("oled-base");
+    video.classList.toggle("oled-tab-hidden", document.hidden);
+    video.classList.toggle("oled-video-paused", video.paused || video.ended);
+
+    // Start from the video's normal framing (identity transform), still
+    // under transition:none from the reset above so this jump is instant
+    // and overwrites any leftover values from a prior run.
+    video.style.setProperty("--oled-x", "0");
+    video.style.setProperty("--oled-y", "0");
+    video.style.setProperty("--oled-scale", "1");
+
+    // Release the inline transition:none now that the instant jump above
+    // is committed, so .oled-intro's CSS transition rule (added next) is
+    // free to actually apply instead of being masked by it.
+    video.style.transition = "";
+
+    video.classList.add("oled-intro");
+
+    state.introTimerId = setTimeout(function() {
+        state.introTimerId = null;
+
+        if (!state.video || state.video !== video) {
+            return;
+        }
+
+        // Force a reflow so the transition armed above is guaranteed to
+        // pick up this change as an animated step, rather than being
+        // coalesced with the identity values set when we bound the video.
+        void video.offsetWidth;
+
+        // Ease toward the drift path's starting point. Once this
+        // transition finishes, swap in .oled-drift: the custom
+        // properties are already at the keyframe-0% values, so the
+        // animation picks up seamlessly with no visible jump.
+        video.style.setProperty("--oled-x", "-1");
+        video.style.setProperty("--oled-y", "1");
+        video.style.setProperty("--oled-scale", String(state.settings.scaleMin));
+
+        state.introTimerId = setTimeout(function() {
+            state.introTimerId = null;
+
+            if (!state.video || state.video !== video) {
+                return;
+            }
+
+            video.classList.remove("oled-intro");
+            video.classList.add("oled-drift");
+        }, state.settings.introDurationMs);
+    }, state.settings.introDelayMs);
+}
+
+function unbindVideo(video) {
+    if (state.introTimerId !== null) {
+        clearTimeout(state.introTimerId);
+        state.introTimerId = null;
     }
 
-    if (state.video.paused || state.video.ended) {
-        state.timerId = setTimeout(
-            scheduleNextMove,
-            1000
-        );
+    detachVideoListeners(video);
 
-        return;
-    }
-
-    const transform = createRandomTransform();
-
-    applyTransform(transform);
-
-    state.timerId = setTimeout(
-        scheduleNextMove,
-        transform.durationMs + transform.pauseMs
+    video.classList.remove(
+        "oled-base",
+        "oled-drift",
+        "oled-intro",
+        "oled-video-paused",
+        "oled-tab-hidden"
     );
-}
-
-function stopTimer() {
-    if (state.timerId !== null) {
-        clearTimeout(state.timerId);
-        state.timerId = null;
-    }
 }
 
 function sleep(ms) {
@@ -228,6 +219,14 @@ function onFullscreenChange() {
     if (!document.fullscreenElement) {
         stop();
     }
+}
+
+function onVisibilityChange() {
+    if (!state.video) {
+        return;
+    }
+
+    state.video.classList.toggle("oled-tab-hidden", document.hidden);
 }
 
 function attachVideoObserver() {
@@ -260,25 +259,45 @@ function disconnectVideoObserver() {
     }
 }
 
-function onVisibilityChange() {
-    if (document.hidden) {
-        stopTimer();
-        return;
-    }
+async function requestFullscreenWithRetry() {
+    const maxAttempts = 5;
+    const retryDelayMs = 300;
 
-    if (state.running) {
-        scheduleNextMove();
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        if (state.cancelStart) {
+            return;
+        }
+
+        try {
+            await document.documentElement.requestFullscreen({
+                navigationUI: "hide"
+            });
+
+            return;
+        }
+        catch (error) {
+            // Chrome briefly rejects requestFullscreen() right after
+            // exiting fullscreen (anti-flicker/clickjacking cooldown).
+            // Retry a few times before giving up.
+            if (attempt === maxAttempts) {
+                throw error;
+            }
+
+            await sleep(retryDelayMs);
+        }
     }
 }
 
 async function start() {
-    if (state.running || state.starting) {
+    if (state.starting) {
         return;
     }
 
-    if (state.resetTimerId !== null) {
-        clearTimeout(state.resetTimerId);
-        state.resetTimerId = null;
+    if (state.running) {
+        // A second "start" while already running is a restart request,
+        // not a no-op — tear down cleanly first so the sequence below
+        // runs exactly as it would on a genuine first launch.
+        stop();
     }
 
     state.starting = true;
@@ -290,17 +309,15 @@ async function start() {
         state.settings = await loadSettings();
 
         if (!document.fullscreenElement) {
-            await document.documentElement.requestFullscreen({
-                navigationUI: "hide"
-            });
+            await requestFullscreenWithRetry();
         }
 
-        await sleep(
-            randomInt(
-                state.settings.fullscreenDelayMinMs,
-                state.settings.fullscreenDelayMaxMs
-            )
-        );
+        if (state.cancelStart) {
+            console.log("[OLED] Start cancelled");
+            return;
+        }
+
+        await sleep(state.settings.fullscreenDelayMs);
 
         if (state.cancelStart || !document.fullscreenElement) {
             console.log("[OLED] Start cancelled");
@@ -321,7 +338,7 @@ async function start() {
 
         state.running = true;
 
-        scheduleNextMove();
+        bindVideo(state.video);
 
         console.log("[OLED] Started");
     }
@@ -342,8 +359,6 @@ function stop() {
         return;
     }
 
-    stopTimer();
-
     document.removeEventListener(
         "fullscreenchange",
         onFullscreenChange
@@ -356,32 +371,30 @@ function stop() {
 
     disconnectVideoObserver();
 
-    if (state.resetTimerId !== null) {
-        clearTimeout(state.resetTimerId);
-        state.resetTimerId = null;
-    }
-
     if (state.video) {
-        state.video.style.transition =
-            "transform 300ms ease";
+        const video = state.video;
 
-        state.video.style.transform = state.originalTransform;
+        // unbindVideo() also cancels any pending intro timer.
+        unbindVideo(video);
 
-        state.resetTimerId = setTimeout(function() {
-            state.resetTimerId = null;
+        // Instantly and fully restore the video — no transition, no
+        // delayed cleanup. Exiting fullscreen already changes the
+        // video's on-screen size/position abruptly on its own (the
+        // browser handles that), so easing our own transform back over
+        // that same moment only adds jank. This also means there's no
+        // leftover timer/state of any kind for the next start() to
+        // trip over — every start is guaranteed a genuinely clean slate.
+        video.style.transition = "";
+        video.style.transform = state.originalTransform;
+        video.style.transformOrigin = state.originalTransformOrigin;
+        video.style.willChange = "";
 
-            if (!state.video) {
-                return;
-            }
-
-            state.video.style.transition = "";
-            state.video.style.transformOrigin = state.originalTransformOrigin;
-            state.video.style.willChange = "";
-        }, 350);
+        video.style.removeProperty("--oled-x");
+        video.style.removeProperty("--oled-y");
+        video.style.removeProperty("--oled-scale");
     }
 
     state.running = false;
-    state.lastTransform = null;
 }
 
 async function onRuntimeMessage(message) {
