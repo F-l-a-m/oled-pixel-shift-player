@@ -27,15 +27,25 @@ const state = {
     starting: false,
     cancelStart: false,
     timerId: null,
+    resetTimerId: null,
     lastTransform: null,
-    settings: DEFAULTS
+    settings: DEFAULTS,
+    originalTransform: "",
+    originalTransformOrigin: "",
+    videoObserver: null
 };
 
 function findVideo() {
-    state.video = document.querySelector("video");
+    const video = document.querySelector("video");
 
-    if (!state.video) {
+    if (!video) {
         throw new Error("No HTML5 video found.");
+    }
+
+    if (video !== state.video) {
+        state.video = video;
+        state.originalTransform = video.style.transform;
+        state.originalTransformOrigin = video.style.transformOrigin;
     }
 }
 
@@ -88,7 +98,12 @@ async function loadSettings() {
 }
 
 function createRandomTransform() {
+    const maxAttempts = 30;
+    let attempts = 0;
+
     while (true) {
+        attempts++;
+
         const scale = randomFloat(
             state.settings.scaleMin,
             state.settings.scaleMax
@@ -150,7 +165,8 @@ function createRandomTransform() {
 
         if (
             distance > 500 ||
-            scaleDifference > 0.05
+            scaleDifference > 0.05 ||
+            attempts >= maxAttempts
         ) {
             state.lastTransform = transform;
             return transform;
@@ -159,6 +175,8 @@ function createRandomTransform() {
 }
 
 function applyTransform(transform) {
+    state.video.style.willChange = "transform";
+
     state.video.style.transition =
         `transform ${transform.durationMs}ms ${transform.easing}`;
 
@@ -212,49 +230,105 @@ function onFullscreenChange() {
     }
 }
 
+function attachVideoObserver() {
+    disconnectVideoObserver();
+
+    state.videoObserver = new MutationObserver(function() {
+        if (state.video && document.contains(state.video)) {
+            return;
+        }
+
+        try {
+            findVideo();
+        }
+        catch (error) {
+            console.warn("[OLED] Video element lost, stopping.", error);
+            stop();
+        }
+    });
+
+    state.videoObserver.observe(document.body, {
+        childList: true,
+        subtree: true
+    });
+}
+
+function disconnectVideoObserver() {
+    if (state.videoObserver) {
+        state.videoObserver.disconnect();
+        state.videoObserver = null;
+    }
+}
+
+function onVisibilityChange() {
+    if (document.hidden) {
+        stopTimer();
+        return;
+    }
+
+    if (state.running) {
+        scheduleNextMove();
+    }
+}
+
 async function start() {
     if (state.running || state.starting) {
         return;
     }
 
+    if (state.resetTimerId !== null) {
+        clearTimeout(state.resetTimerId);
+        state.resetTimerId = null;
+    }
+
     state.starting = true;
     state.cancelStart = false;
 
-    findVideo();
+    try {
+        findVideo();
 
-    state.settings = await loadSettings();
+        state.settings = await loadSettings();
 
-    if (!document.fullscreenElement) {
-        await document.documentElement.requestFullscreen({
-            navigationUI: "hide"
-        });
+        if (!document.fullscreenElement) {
+            await document.documentElement.requestFullscreen({
+                navigationUI: "hide"
+            });
+        }
+
+        await sleep(
+            randomInt(
+                state.settings.fullscreenDelayMinMs,
+                state.settings.fullscreenDelayMaxMs
+            )
+        );
+
+        if (state.cancelStart || !document.fullscreenElement) {
+            console.log("[OLED] Start cancelled");
+            return;
+        }
+
+        document.addEventListener(
+            "fullscreenchange",
+            onFullscreenChange
+        );
+
+        document.addEventListener(
+            "visibilitychange",
+            onVisibilityChange
+        );
+
+        attachVideoObserver();
+
+        state.running = true;
+
+        scheduleNextMove();
+
+        console.log("[OLED] Started");
     }
-
-    await sleep(
-        randomInt(
-            state.settings.fullscreenDelayMinMs,
-            state.settings.fullscreenDelayMaxMs
-        )
-    );
-
-    if (state.cancelStart || !document.fullscreenElement) {
+    finally {
         state.starting = false;
         state.cancelStart = false;
-        console.log("[OLED] Start cancelled");
-        return;
     }
-
-    document.addEventListener(
-        "fullscreenchange",
-        onFullscreenChange
-    );
-
-    state.running = true;
-    state.starting = false;
-
-    scheduleNextMove();
-
-    console.log("[OLED] Started");
 }
 
 function stop() {
@@ -275,19 +349,34 @@ function stop() {
         onFullscreenChange
     );
 
+    document.removeEventListener(
+        "visibilitychange",
+        onVisibilityChange
+    );
+
+    disconnectVideoObserver();
+
+    if (state.resetTimerId !== null) {
+        clearTimeout(state.resetTimerId);
+        state.resetTimerId = null;
+    }
+
     if (state.video) {
         state.video.style.transition =
             "transform 300ms ease";
 
-        state.video.style.transform = "";
+        state.video.style.transform = state.originalTransform;
 
-        setTimeout(function() {
+        state.resetTimerId = setTimeout(function() {
+            state.resetTimerId = null;
+
             if (!state.video) {
                 return;
             }
 
             state.video.style.transition = "";
-            state.video.style.transformOrigin = "";
+            state.video.style.transformOrigin = state.originalTransformOrigin;
+            state.video.style.willChange = "";
         }, 350);
     }
 
@@ -296,6 +385,11 @@ function stop() {
 }
 
 async function onRuntimeMessage(message) {
+    if (message.action === "stop") {
+        stop();
+        return;
+    }
+
     if (message.action !== "start") {
         return;
     }
