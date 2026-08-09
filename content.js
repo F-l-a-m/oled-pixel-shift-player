@@ -3,19 +3,15 @@ const DEFAULTS = {
     scaleMax: 0.70,
 
     // Percent of the viewport we always keep clear at the screen edges,
-    // no matter the scale/offset at any given moment (see content.css
-    // header comment for the math). This is what makes the drift safe
-    // on any screen size or aspect ratio without per-screen tuning.
+    // no matter the scale/offset at any given moment. The max drift
+    // amplitude is derived from this and scaleMax entirely in CSS
+    // (see content.css) — this is what makes the drift safe on any
+    // screen size or aspect ratio without per-screen tuning.
     safetyMarginPct: 3,
 
     durationXs: 53,
     durationYs: 71,
-    durationScaleS: 97,
-
-    introDurationMs: 2500,
-    introDelayMs: 500,
-
-    fullscreenDelayMs: 4000
+    durationScaleS: 97
 };
 
 const state = {
@@ -23,8 +19,7 @@ const state = {
     running: false,
     starting: false,
     cancelStart: false,
-    introTimerId: null,
-    settings: DEFAULTS,
+    settings: { ...DEFAULTS },
     originalTransform: "",
     originalTransformOrigin: "",
     videoObserver: null
@@ -65,28 +60,13 @@ async function loadSettings() {
     };
 }
 
-// Maximum safe drift amplitude, as a percent of the viewport, given the
-// worst case: scale at its largest (least shrink) and offset at its
-// maximum simultaneously. Guarantees the video element's box — and
-// therefore whatever picture is letterboxed inside it — never comes
-// closer than settings.safetyMarginPct to the screen edge.
-function computeMaxShiftPct(settings) {
-    const naturalHalfMarginPct = (1 - settings.scaleMax) * 50;
-
-    return Math.max(0, naturalHalfMarginPct - settings.safetyMarginPct);
-}
-
 function applySettingsToVideo(video, settings) {
-    const maxShiftPct = computeMaxShiftPct(settings);
-
-    video.style.setProperty("--oled-shift-x", `${maxShiftPct}vw`);
-    video.style.setProperty("--oled-shift-y", `${maxShiftPct}vh`);
+    video.style.setProperty("--oled-safety-margin", settings.safetyMarginPct / 100);
     video.style.setProperty("--oled-scale-min", settings.scaleMin);
     video.style.setProperty("--oled-scale-max", settings.scaleMax);
     video.style.setProperty("--oled-duration-x", `${settings.durationXs}s`);
     video.style.setProperty("--oled-duration-y", `${settings.durationYs}s`);
     video.style.setProperty("--oled-duration-scale", `${settings.durationScaleS}s`);
-    video.style.setProperty("--oled-intro-duration", `${settings.introDurationMs}ms`);
 }
 
 function onVideoPause() {
@@ -116,23 +96,15 @@ function detachVideoListeners(video) {
 }
 
 function resetVideoStyles(video) {
-    // Unconditionally clear anything a prior run might have left inline —
-    // transition/transform/willChange/transformOrigin — regardless of
-    // how that run ended. This is what makes every start() deterministic:
-    // bindVideo() never trusts prior state, it enforces a clean slate.
-    video.style.transition = "none";
+    // Unconditionally clear anything a prior run might have left inline,
+    // regardless of how that run ended, so every bind starts from an
+    // identical clean slate. (--oled-x/-y/-scale don't need clearing
+    // here: the drift animations are the only thing that ever touches
+    // them, and they override from their own 0% keyframe the instant
+    // .oled-drift is added, regardless of any leftover value.)
     video.style.transform = "";
     video.style.transformOrigin = "";
     video.style.willChange = "";
-    video.style.removeProperty("--oled-x");
-    video.style.removeProperty("--oled-y");
-    video.style.removeProperty("--oled-scale");
-
-    // Force a reflow so the "none" transition above is committed before
-    // .oled-intro's transition rule gets armed right after this call —
-    // otherwise the browser could coalesce this reset with the very
-    // first property change and skip animating it.
-    void video.offsetWidth;
 }
 
 function bindVideo(video) {
@@ -145,65 +117,17 @@ function bindVideo(video) {
     video.classList.toggle("oled-tab-hidden", document.hidden);
     video.classList.toggle("oled-video-paused", video.paused || video.ended);
 
-    // Start from the video's normal framing (identity transform), still
-    // under transition:none from the reset above so this jump is instant
-    // and overwrites any leftover values from a prior run.
-    video.style.setProperty("--oled-x", "0");
-    video.style.setProperty("--oled-y", "0");
-    video.style.setProperty("--oled-scale", "1");
-
-    // Release the inline transition:none now that the instant jump above
-    // is committed, so .oled-intro's CSS transition rule (added next) is
-    // free to actually apply instead of being masked by it.
-    video.style.transition = "";
-
-    video.classList.add("oled-intro");
-
-    state.introTimerId = setTimeout(function() {
-        state.introTimerId = null;
-
-        if (!state.video || state.video !== video) {
-            return;
-        }
-
-        // Force a reflow so the transition armed above is guaranteed to
-        // pick up this change as an animated step, rather than being
-        // coalesced with the identity values set when we bound the video.
-        void video.offsetWidth;
-
-        // Ease toward the drift path's starting point. Once this
-        // transition finishes, swap in .oled-drift: the custom
-        // properties are already at the keyframe-0% values, so the
-        // animation picks up seamlessly with no visible jump.
-        video.style.setProperty("--oled-x", "-1");
-        video.style.setProperty("--oled-y", "1");
-        video.style.setProperty("--oled-scale", String(state.settings.scaleMin));
-
-        state.introTimerId = setTimeout(function() {
-            state.introTimerId = null;
-
-            if (!state.video || state.video !== video) {
-                return;
-            }
-
-            video.classList.remove("oled-intro");
-            video.classList.add("oled-drift");
-        }, state.settings.introDurationMs);
-    }, state.settings.introDelayMs);
+    // The infinite drift starts immediately (see content.css) — no JS
+    // timer is involved.
+    video.classList.add("oled-drift");
 }
 
 function unbindVideo(video) {
-    if (state.introTimerId !== null) {
-        clearTimeout(state.introTimerId);
-        state.introTimerId = null;
-    }
-
     detachVideoListeners(video);
 
     video.classList.remove(
         "oled-base",
         "oled-drift",
-        "oled-intro",
         "oled-video-paused",
         "oled-tab-hidden"
     );
@@ -306,41 +230,54 @@ async function start() {
     try {
         findVideo();
 
-        state.settings = await loadSettings();
+        const video = state.video;
+        const enteringFullscreen = !document.fullscreenElement;
 
-        if (!document.fullscreenElement) {
-            await requestFullscreenWithRetry();
+        // Hide the video while Chrome does its own native fullscreen-
+        // enter transition — that transition briefly renders the video
+        // at its original size regardless of what CSS we apply, and
+        // nothing in JS/CSS can shorten or skip it. Hiding it means the
+        // first frame the viewer actually sees is already the shrunk,
+        // drifting state, whatever the native transition's timing is.
+        if (enteringFullscreen) {
+            video.style.visibility = "hidden";
         }
 
-        if (state.cancelStart) {
-            console.log("[OLED] Start cancelled");
-            return;
+        try {
+            state.settings = await loadSettings();
+
+            if (enteringFullscreen) {
+                await requestFullscreenWithRetry();
+            }
+
+            if (state.cancelStart || !document.fullscreenElement) {
+                console.log("[OLED] Start cancelled");
+                return;
+            }
+
+            document.addEventListener(
+                "fullscreenchange",
+                onFullscreenChange
+            );
+
+            document.addEventListener(
+                "visibilitychange",
+                onVisibilityChange
+            );
+
+            attachVideoObserver();
+
+            state.running = true;
+
+            bindVideo(video);
+
+            console.log("[OLED] Started");
         }
-
-        await sleep(state.settings.fullscreenDelayMs);
-
-        if (state.cancelStart || !document.fullscreenElement) {
-            console.log("[OLED] Start cancelled");
-            return;
+        finally {
+            if (enteringFullscreen) {
+                video.style.visibility = "";
+            }
         }
-
-        document.addEventListener(
-            "fullscreenchange",
-            onFullscreenChange
-        );
-
-        document.addEventListener(
-            "visibilitychange",
-            onVisibilityChange
-        );
-
-        attachVideoObserver();
-
-        state.running = true;
-
-        bindVideo(state.video);
-
-        console.log("[OLED] Started");
     }
     finally {
         state.starting = false;
@@ -374,45 +311,53 @@ function stop() {
     if (state.video) {
         const video = state.video;
 
-        // unbindVideo() also cancels any pending intro timer.
         unbindVideo(video);
 
         // Instantly and fully restore the video — no transition, no
         // delayed cleanup. Exiting fullscreen already changes the
-        // video's on-screen size/position abruptly on its own (the
-        // browser handles that), so easing our own transform back over
-        // that same moment only adds jank. This also means there's no
-        // leftover timer/state of any kind for the next start() to
-        // trip over — every start is guaranteed a genuinely clean slate.
-        video.style.transition = "";
+        // video's on-screen size/position abruptly on its own, so
+        // easing our own transform back over that same moment only
+        // adds jank. (--oled-x/-y/-scale don't need clearing here:
+        // unbindVideo() already removed the classes that read them, so
+        // they have no effect until the next bind, which starts fresh
+        // animations that override them immediately regardless.)
         video.style.transform = state.originalTransform;
         video.style.transformOrigin = state.originalTransformOrigin;
         video.style.willChange = "";
-
-        video.style.removeProperty("--oled-x");
-        video.style.removeProperty("--oled-y");
-        video.style.removeProperty("--oled-scale");
     }
 
     state.running = false;
 }
 
-async function onRuntimeMessage(message) {
-    if (message.action === "stop") {
-        stop();
-        return;
-    }
-
-    if (message.action !== "start") {
-        return;
-    }
-
+async function startSafely() {
     try {
         await start();
     }
     catch (error) {
         console.error(error);
         alert(error.message);
+    }
+}
+
+async function onRuntimeMessage(message) {
+    if (message.action === "toggle") {
+        if (state.running || state.starting) {
+            stop();
+        }
+        else {
+            await startSafely();
+        }
+
+        return;
+    }
+
+    if (message.action === "stop") {
+        stop();
+        return;
+    }
+
+    if (message.action === "start") {
+        await startSafely();
     }
 }
 

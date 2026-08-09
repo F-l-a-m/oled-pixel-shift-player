@@ -20,9 +20,24 @@ startButton.addEventListener("click", async () => {
         return;
     }
 
-    await chrome.tabs.sendMessage(tab.id, {
-        action: "start"
-    });
+    try {
+        await chrome.tabs.sendMessage(tab.id, {
+            action: "start"
+        });
+    }
+    catch (error) {
+        // Most commonly: no content script on this page (chrome://,
+        // the Chrome Web Store, a page open before install/update, etc).
+        // Don't show a cooldown for a start that never actually happened.
+        console.error("[OLED] Failed to reach the page:", error);
+        startLabel.textContent = "Couldn't reach the page";
+
+        setTimeout(() => {
+            startLabel.textContent = DEFAULT_LABEL;
+        }, COOLDOWN_MS);
+
+        return;
+    }
 
     beginCooldown();
 });
@@ -37,7 +52,7 @@ function beginCooldown() {
         `${COOLDOWN_MS}ms`
     );
 
-    startLabel.textContent = "Подождите\u2026";
+    startLabel.textContent = "Please wait\u2026";
 
     setTimeout(() => {
         cooldownActive = false;

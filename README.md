@@ -14,11 +14,11 @@ The main idea is to use videos as background visuals (ambient videos, wallpapers
 
 During fullscreen playback the extension:
 
-- continuously drifts the video's position and zoom level, driven entirely by CSS animations;
+- immediately shrinks the video and starts drifting its position and zoom level, driven entirely by CSS animations — no intro/hold phase;
 - combines three independently-timed cycles (position X, position Y, scale) whose periods are deliberately incommensurate, so the combined pattern doesn't visibly repeat for hours, without relying on randomness;
-- uses slow, smooth easing throughout, with no static pauses;
+- keeps a configurable safety margin at the screen edges at all times — the maximum drift amplitude is derived from the zoom range and the margin, so the video never approaches the edge closer than that margin, on any screen size or aspect ratio;
 - automatically pauses the drift while the video is paused/ended or the tab is hidden;
-- restores the original state when stopped.
+- instantly and fully restores the video to its original state when stopped (exiting fullscreen, or pressing Start again — which cleanly restarts the effect from scratch rather than stacking on top of a running one).
 
 ## Installation
 
@@ -40,9 +40,10 @@ chrome://extensions
 
 1. Open a website with HTML5 video.
 2. Start fullscreen playback.
-3. Open the extension popup.
-4. Press Start.
+3. Open the extension popup and press Start, or use the keyboard shortcut **Alt+Shift+O** (toggles the effect on/off — rebindable at `chrome://extensions/shortcuts`).
+4. The Start button briefly shows a clock-fill cooldown while Chrome's fullscreen API settles — wait for it before pressing Start again.
 5. Leave the video running as a background visual.
+6. Pressing Start again at any time restarts the effect from scratch. The keyboard shortcut instead toggles: press it again (or exit fullscreen) to stop and instantly restore the video.
 
 ## Current status
 

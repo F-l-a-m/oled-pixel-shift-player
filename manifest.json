@@ -17,6 +17,16 @@
     "default_popup": "popup/popup.html"
   },
 
+  "commands": {
+    "toggle-oled": {
+      "suggested_key": {
+        "default": "Alt+Shift+O",
+        "mac": "Alt+Shift+O"
+      },
+      "description": "Toggle OLED pixel shift"
+    }
+  },
+
   "background": {
     "service_worker": "background.js"
   },

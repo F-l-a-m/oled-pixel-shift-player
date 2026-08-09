@@ -1,14 +1,17 @@
-/* OLED pixel-shift drift effect.
-   Three independently-timed CSS animations (incommensurate periods)
-   continuously drift the video's position and scale. No JS-driven
-   randomness or animation loop is involved — the browser's animation
-   engine ticks this entirely on its own.
+/* OLED pixel-shift drift effect — entirely animation-driven.
+   Three infinite, independently-timed drift animations (position X,
+   position Y, scale) start immediately when .oled-drift is added — no
+   intro/hold phase, the video jumps straight to the shrunk drifting
+   state. No JS timers are involved in the animation itself.
 
-   Safety margin: --oled-shift-x/-y are computed in content.js from
-   (1 - scaleMax) * 50 - safetyMarginPct, so that even in the worst
-   case (largest scale + maximum offset happening at once) the video
-   element's box never comes closer than safetyMarginPct to the
-   screen edge, on any screen size or aspect ratio. */
+   The incommensurate periods (53s/71s/97s) give a visually
+   non-repeating pattern for hours without any randomness.
+
+   Safety margin: --oled-shift-frac is computed in this stylesheet from
+   scaleMax and the safety margin (both passed in once from content.js),
+   so that even in the worst case (largest scale + maximum offset at
+   once) the video element's box never comes closer than the margin to
+   the screen edge, on any screen size or aspect ratio. */
 
 @property --oled-x {
     syntax: "<number>";
@@ -30,41 +33,37 @@
 
 video.oled-base {
     /* Defaults; overridden per-instance by content.js from user settings. */
-    --oled-shift-x: 0vw;
-    --oled-shift-y: 0vh;
     --oled-scale-min: 0.63;
     --oled-scale-max: 0.70;
+    --oled-safety-margin: 0.03;
     --oled-duration-x: 53s;
     --oled-duration-y: 71s;
     --oled-duration-scale: 97s;
-    --oled-intro-duration: 2.5s;
+
+    /* Max drift amplitude as a fraction of the viewport, computed purely
+       in CSS — see header comment for the math. */
+    --oled-shift-frac: max(0, calc((1 - var(--oled-scale-max)) * 0.5 - var(--oled-safety-margin)));
 
     transform-origin: center center;
     will-change: transform;
 
     transform:
         translate3d(
-            calc(var(--oled-x) * var(--oled-shift-x)),
-            calc(var(--oled-y) * var(--oled-shift-y)),
+            calc(var(--oled-x) * var(--oled-shift-frac) * 100vw),
+            calc(var(--oled-y) * var(--oled-shift-frac) * 100vh),
             0
         )
         scale(var(--oled-scale));
 }
 
-/* One-shot intro: eases from the video's normal framing into the
-   drift path's starting point. content.js swaps this class out for
-   .oled-drift once the transition finishes, so the animation picks
-   up exactly where the transition left off — no visible jump. */
-video.oled-base.oled-intro {
-    transition:
-        --oled-x var(--oled-intro-duration) ease,
-        --oled-y var(--oled-intro-duration) ease,
-        --oled-scale var(--oled-intro-duration) ease;
-}
-
 video.oled-base.oled-drift {
     animation-name: oled-drift-x, oled-drift-y, oled-drift-scale;
-    animation-duration: var(--oled-duration-x), var(--oled-duration-y), var(--oled-duration-scale);
+
+    animation-duration:
+        var(--oled-duration-x),
+        var(--oled-duration-y),
+        var(--oled-duration-scale);
+
     animation-timing-function: ease-in-out;
     animation-iteration-count: infinite;
     animation-direction: alternate;
