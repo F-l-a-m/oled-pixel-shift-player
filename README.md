@@ -18,7 +18,9 @@ During fullscreen playback the extension:
 - combines three independently-timed cycles (position X, position Y, scale) whose periods are deliberately incommensurate, so the combined pattern doesn't visibly repeat for hours, without relying on randomness;
 - keeps a configurable safety margin at the screen edges at all times — the maximum drift amplitude is derived from the zoom range and the margin, so the video never approaches the edge closer than that margin, on any screen size or aspect ratio;
 - automatically pauses the drift while the video is paused/ended or the tab is hidden;
-- instantly and fully restores the video to its original state when stopped (exiting fullscreen, or pressing Start again — which cleanly restarts the effect from scratch rather than stacking on top of a running one).
+- instantly and fully restores the video to its original state when stopped (exiting fullscreen or toggling the extension again).
+- injects its code only when you press the button or hotkey; pages are not
+  accessed while you browse.
 
 ## Installation
 
@@ -36,22 +38,27 @@ chrome://extensions
 
 5. Select the project folder.
 
+After changing files, click the reload button for the extension and refresh the
+video page. Check that Chrome shows version 0.2.0 before testing.
+
 ## Usage
 
 1. Open a website with HTML5 video.
 2. Start fullscreen playback.
-3. Open the extension popup and press Start, or use the keyboard shortcut **Alt+Shift+O** (toggles the effect on/off — rebindable at `chrome://extensions/shortcuts`).
-4. The Start button briefly shows a clock-fill cooldown while Chrome's fullscreen API settles — wait for it before pressing Start again.
+3. Open the extension popup and press **Start / stop OLED mode**, or use **Alt+Shift+O** (both toggle the effect — rebindable at `chrome://extensions/shortcuts`).
+4. You can change scale, margins and timings in **Settings**. They apply next time you start the effect.
 5. Leave the video running as a background visual.
-6. Pressing Start again at any time restarts the effect from scratch. The keyboard shortcut instead toggles: press it again (or exit fullscreen) to stop and instantly restore the video.
+6. Press the button/hotkey again (or exit fullscreen) to stop and restore the video.
 
 ## Current status
 
-MVP version.
+Version 0.2.0. Requires Chrome 85 or newer.
+
+For a quick code check, run `node tests/verify-css-contract.js` from the
+project folder.
 
 Planned:
 
-- Settings panel
 - Movement profiles
 - Custom timing
 - More OLED protection strategies

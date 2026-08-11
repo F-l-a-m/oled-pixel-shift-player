@@ -45,8 +45,6 @@ video.oled-base {
     --oled-shift-frac: max(0, calc((1 - var(--oled-scale-max)) * 0.5 - var(--oled-safety-margin)));
 
     transform-origin: center center;
-    will-change: transform;
-
     transform:
         translate3d(
             calc(var(--oled-x) * var(--oled-shift-frac) * 100vw),

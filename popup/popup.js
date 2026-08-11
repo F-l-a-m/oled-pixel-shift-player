@@ -1,65 +1,48 @@
 const startButton = document.getElementById("start");
-const startLabel = document.getElementById("startLabel");
+const settingsForm = document.getElementById("settings");
+const status = document.getElementById("status");
 
-const COOLDOWN_MS = 1500;
-const DEFAULT_LABEL = startLabel.textContent;
-
-let cooldownActive = false;
+async function getActiveTabId() {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    return tab?.id;
+}
 
 startButton.addEventListener("click", async () => {
-    if (cooldownActive) {
-        return;
-    }
-
-    const [tab] = await chrome.tabs.query({
-        active: true,
-        currentWindow: true
-    });
-
-    if (!tab?.id) {
-        return;
-    }
+    const tabId = await getActiveTabId();
+    if (!tabId) return;
 
     try {
-        await chrome.tabs.sendMessage(tab.id, {
-            action: "start"
+        await chrome.scripting.insertCSS({ target: { tabId }, files: ["content.css"] });
+        await chrome.scripting.executeScript({
+            target: { tabId },
+            files: ["shared.js", "content.js"]
         });
+        await chrome.tabs.sendMessage(tabId, { action: OLED_ACTIONS.TOGGLE });
+        status.textContent = "Done";
     }
     catch (error) {
-        // Most commonly: no content script on this page (chrome://,
-        // the Chrome Web Store, a page open before install/update, etc).
-        // Don't show a cooldown for a start that never actually happened.
-        console.error("[OLED] Failed to reach the page:", error);
-        startLabel.textContent = "Couldn't reach the page";
-
-        setTimeout(() => {
-            startLabel.textContent = DEFAULT_LABEL;
-        }, COOLDOWN_MS);
-
-        return;
+        console.error("[OLED] Failed to contact the extension:", error);
+        status.textContent = "Couldn't run on this page";
     }
-
-    beginCooldown();
 });
 
-function beginCooldown() {
-    cooldownActive = true;
-
-    startButton.disabled = true;
-    startButton.classList.add("cooldown");
-    startButton.style.setProperty(
-        "--cooldown-duration",
-        `${COOLDOWN_MS}ms`
-    );
-
-    startLabel.textContent = "Please wait\u2026";
-
-    setTimeout(() => {
-        cooldownActive = false;
-
-        startButton.disabled = false;
-        startButton.classList.remove("cooldown");
-
-        startLabel.textContent = DEFAULT_LABEL;
-    }, COOLDOWN_MS);
+async function loadSettings() {
+    const { settings = {} } = await chrome.storage.local.get("settings");
+    for (const [key, value] of Object.entries(settings)) {
+        const field = settingsForm.elements.namedItem(key);
+        if (field) field.value = value;
+    }
 }
+
+settingsForm.addEventListener("change", async () => {
+    const settings = Object.fromEntries(new FormData(settingsForm).entries());
+    for (const key of Object.keys(settings)) settings[key] = Number(settings[key]);
+    if (settings.scaleMin > settings.scaleMax) {
+        status.textContent = "Minimum scale cannot be larger than maximum scale";
+        return;
+    }
+    await chrome.storage.local.set({ settings });
+    status.textContent = "Settings saved";
+});
+
+loadSettings();

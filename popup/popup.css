@@ -1,9 +1,3 @@
-@property --cooldown-progress {
-    syntax: "<percentage>";
-    inherits: false;
-    initial-value: 0%;
-}
-
 :root {
     color-scheme: light dark;
 }
@@ -47,32 +41,34 @@ body {
     opacity: 0.75;
 }
 
-/* Clock icon: a circular "pie" that fills clockwise over the cooldown
-   duration, like an ability-cooldown indicator. Hidden until active. */
-.cooldown-icon {
-    display: none;
-    width: 16px;
-    height: 16px;
-    flex: none;
-    border-radius: 50%;
-    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4) inset;
-    background: conic-gradient(
-        #fff var(--cooldown-progress, 0%),
-        rgba(255, 255, 255, 0.25) 0%
-    );
+#status {
+    min-height: 1.2em;
+    margin: 8px 0;
+    color: #b8c7ff;
+    font-size: 12px;
 }
 
-#start.cooldown .cooldown-icon {
-    display: block;
-    animation: cooldown-fill var(--cooldown-duration, 1500ms) linear forwards;
+details {
+    font-size: 13px;
 }
 
-@keyframes cooldown-fill {
-    from {
-        --cooldown-progress: 0%;
-    }
+summary {
+    cursor: pointer;
+}
 
-    to {
-        --cooldown-progress: 100%;
-    }
+form {
+    display: grid;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+label {
+    display: grid;
+    gap: 3px;
+}
+
+input {
+    box-sizing: border-box;
+    width: 100%;
+    padding: 5px;
 }

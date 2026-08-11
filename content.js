@@ -1,371 +1,426 @@
-const DEFAULTS = {
-    scaleMin: 0.63,
-    scaleMax: 0.70,
+initializeOLED();
 
-    // Percent of the viewport we always keep clear at the screen edges,
-    // no matter the scale/offset at any given moment. The max drift
-    // amplitude is derived from this and scaleMax entirely in CSS
-    // (see content.css) — this is what makes the drift safe on any
-    // screen size or aspect ratio without per-screen tuning.
-    safetyMarginPct: 3,
+function initializeOLED() {
+    const CONTENT_VERSION = "0.2.0";
 
-    durationXs: 53,
-    durationYs: 71,
-    durationScaleS: 97
-};
-
-const state = {
-    video: null,
-    running: false,
-    starting: false,
-    cancelStart: false,
-    settings: { ...DEFAULTS },
-    originalTransform: "",
-    originalTransformOrigin: "",
-    videoObserver: null
-};
-
-function findVideo() {
-    const video = document.querySelector("video");
-
-    if (!video) {
-        throw new Error("No HTML5 video found.");
-    }
-
-    if (video === state.video) {
+    if (window.OLED?.version === CONTENT_VERSION) {
         return;
     }
 
-    if (state.video) {
-        unbindVideo(state.video);
-    }
+    window.OLED?.dispose?.();
 
-    state.video = video;
-    state.originalTransform = video.style.transform;
-    state.originalTransformOrigin = video.style.transformOrigin;
+    const DEFAULTS = {
+        scaleMin: 0.63,
+        scaleMax: 0.70,
 
-    // If we're already running (e.g. the site swapped the <video> element
-    // under us), immediately re-attach the drift effect to the new one.
-    if (state.running) {
-        bindVideo(video);
-    }
-}
+        // Percent of the viewport we always keep clear at the screen edges,
+        // no matter the scale/offset at any given moment. The max drift
+        // amplitude is derived from this and scaleMax entirely in CSS
+        // (see content.css) — this is what makes the drift safe on any
+        // screen size or aspect ratio without per-screen tuning.
+        safetyMarginPct: 3,
 
-async function loadSettings() {
-    const saved = await chrome.storage.local.get("settings");
-
-    return {
-        ...DEFAULTS,
-        ...saved.settings
+        durationXs: 53,
+        durationYs: 71,
+        durationScaleS: 97
     };
-}
 
-function applySettingsToVideo(video, settings) {
-    video.style.setProperty("--oled-safety-margin", settings.safetyMarginPct / 100);
-    video.style.setProperty("--oled-scale-min", settings.scaleMin);
-    video.style.setProperty("--oled-scale-max", settings.scaleMax);
-    video.style.setProperty("--oled-duration-x", `${settings.durationXs}s`);
-    video.style.setProperty("--oled-duration-y", `${settings.durationYs}s`);
-    video.style.setProperty("--oled-duration-scale", `${settings.durationScaleS}s`);
-}
+    const state = {
+        video: null,
+        phase: "IDLE",
+        startCancelled: false,
+        settings: { ...DEFAULTS },
+        originalTransform: "",
+        originalTransformOrigin: "",
+        videoObserver: null,
+        videoObserverTimer: null
+    };
 
-function onVideoPause() {
-    if (state.video) {
-        state.video.classList.add("oled-video-paused");
-    }
-}
+    const PHASE = Object.freeze({ IDLE: "IDLE", STARTING: "STARTING", RUNNING: "RUNNING" });
 
-function onVideoPlay() {
-    if (state.video) {
-        state.video.classList.remove("oled-video-paused");
-    }
-}
-
-function attachVideoListeners(video) {
-    video.addEventListener("pause", onVideoPause);
-    video.addEventListener("ended", onVideoPause);
-    video.addEventListener("play", onVideoPlay);
-    video.addEventListener("playing", onVideoPlay);
-}
-
-function detachVideoListeners(video) {
-    video.removeEventListener("pause", onVideoPause);
-    video.removeEventListener("ended", onVideoPause);
-    video.removeEventListener("play", onVideoPlay);
-    video.removeEventListener("playing", onVideoPlay);
-}
-
-function resetVideoStyles(video) {
-    // Unconditionally clear anything a prior run might have left inline,
-    // regardless of how that run ended, so every bind starts from an
-    // identical clean slate. (--oled-x/-y/-scale don't need clearing
-    // here: the drift animations are the only thing that ever touches
-    // them, and they override from their own 0% keyframe the instant
-    // .oled-drift is added, regardless of any leftover value.)
-    video.style.transform = "";
-    video.style.transformOrigin = "";
-    video.style.willChange = "";
-}
-
-function bindVideo(video) {
-    resetVideoStyles(video);
-
-    applySettingsToVideo(video, state.settings);
-    attachVideoListeners(video);
-
-    video.classList.add("oled-base");
-    video.classList.toggle("oled-tab-hidden", document.hidden);
-    video.classList.toggle("oled-video-paused", video.paused || video.ended);
-
-    // The infinite drift starts immediately (see content.css) — no JS
-    // timer is involved.
-    video.classList.add("oled-drift");
-}
-
-function unbindVideo(video) {
-    detachVideoListeners(video);
-
-    video.classList.remove(
-        "oled-base",
-        "oled-drift",
-        "oled-video-paused",
-        "oled-tab-hidden"
-    );
-}
-
-function sleep(ms) {
-    return new Promise(function(resolve) {
-        setTimeout(resolve, ms);
-    });
-}
-
-function onFullscreenChange() {
-    if (!document.fullscreenElement) {
-        stop();
-    }
-}
-
-function onVisibilityChange() {
-    if (!state.video) {
-        return;
+    function transition(event) {
+        const transitions = {
+            START: { [PHASE.IDLE]: PHASE.STARTING },
+            READY: { [PHASE.STARTING]: PHASE.RUNNING },
+            FINISH: { [PHASE.STARTING]: PHASE.IDLE },
+            STOP: { [PHASE.STARTING]: PHASE.IDLE, [PHASE.RUNNING]: PHASE.IDLE }
+        };
+        const next = transitions[event]?.[state.phase];
+        if (!next) return false;
+        state.phase = next;
+        return true;
     }
 
-    state.video.classList.toggle("oled-tab-hidden", document.hidden);
-}
+    function findVideo() {
+        const video = document.querySelector("video");
 
-function attachVideoObserver() {
-    disconnectVideoObserver();
+        if (!video) {
+            throw new Error("No HTML5 video found.");
+        }
 
-    state.videoObserver = new MutationObserver(function() {
-        if (state.video && document.contains(state.video)) {
+        if (video === state.video) {
             return;
         }
 
-        try {
-            findVideo();
-        }
-        catch (error) {
-            console.warn("[OLED] Video element lost, stopping.", error);
-            stop();
-        }
-    });
-
-    state.videoObserver.observe(document.body, {
-        childList: true,
-        subtree: true
-    });
-}
-
-function disconnectVideoObserver() {
-    if (state.videoObserver) {
-        state.videoObserver.disconnect();
-        state.videoObserver = null;
-    }
-}
-
-async function requestFullscreenWithRetry() {
-    const maxAttempts = 5;
-    const retryDelayMs = 300;
-
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        if (state.cancelStart) {
-            return;
+        if (state.video) {
+            unbindVideo(state.video);
         }
 
-        try {
-            await document.documentElement.requestFullscreen({
-                navigationUI: "hide"
-            });
+        state.video = video;
+        state.originalTransform = video.style.transform;
+        state.originalTransformOrigin = video.style.transformOrigin;
 
-            return;
-        }
-        catch (error) {
-            // Chrome briefly rejects requestFullscreen() right after
-            // exiting fullscreen (anti-flicker/clickjacking cooldown).
-            // Retry a few times before giving up.
-            if (attempt === maxAttempts) {
-                throw error;
-            }
-
-            await sleep(retryDelayMs);
-        }
-    }
-}
-
-async function start() {
-    if (state.starting) {
-        return;
-    }
-
-    if (state.running) {
-        // A second "start" while already running is a restart request,
-        // not a no-op — tear down cleanly first so the sequence below
-        // runs exactly as it would on a genuine first launch.
-        stop();
-    }
-
-    state.starting = true;
-    state.cancelStart = false;
-
-    try {
-        findVideo();
-
-        const video = state.video;
-        const enteringFullscreen = !document.fullscreenElement;
-
-        // Hide the video while Chrome does its own native fullscreen-
-        // enter transition — that transition briefly renders the video
-        // at its original size regardless of what CSS we apply, and
-        // nothing in JS/CSS can shorten or skip it. Hiding it means the
-        // first frame the viewer actually sees is already the shrunk,
-        // drifting state, whatever the native transition's timing is.
-        if (enteringFullscreen) {
-            video.style.visibility = "hidden";
-        }
-
-        try {
-            state.settings = await loadSettings();
-
-            if (enteringFullscreen) {
-                await requestFullscreenWithRetry();
-            }
-
-            if (state.cancelStart || !document.fullscreenElement) {
-                console.log("[OLED] Start cancelled");
-                return;
-            }
-
-            document.addEventListener(
-                "fullscreenchange",
-                onFullscreenChange
-            );
-
-            document.addEventListener(
-                "visibilitychange",
-                onVisibilityChange
-            );
-
-            attachVideoObserver();
-
-            state.running = true;
-
+        // If we're already running (e.g. the site swapped the <video> element
+        // under us), immediately re-attach the drift effect to the new one.
+        if (state.phase === PHASE.RUNNING) {
             bindVideo(video);
-
-            console.log("[OLED] Started");
-        }
-        finally {
-            if (enteringFullscreen) {
-                video.style.visibility = "";
-            }
         }
     }
-    finally {
-        state.starting = false;
-        state.cancelStart = false;
+
+    async function loadSettings() {
+        const saved = await chrome.storage.local.get("settings");
+        const settings = { ...DEFAULTS, ...saved.settings };
+        const inRange = (value, fallback, min, max) => {
+            const number = Number(value);
+            return Number.isFinite(number) ? Math.min(max, Math.max(min, number)) : fallback;
+        };
+
+        settings.scaleMin = inRange(settings.scaleMin, DEFAULTS.scaleMin, 0.1, 1);
+        settings.scaleMax = Math.max(settings.scaleMin, inRange(settings.scaleMax, DEFAULTS.scaleMax, 0.1, 1));
+        settings.safetyMarginPct = inRange(settings.safetyMarginPct, DEFAULTS.safetyMarginPct, 0, 20);
+        for (const key of ["durationXs", "durationYs", "durationScaleS"]) {
+            settings[key] = Math.max(1, Number(settings[key]) || DEFAULTS[key]);
+        }
+        return settings;
     }
-}
 
-function stop() {
-    if (state.starting) {
-        // Cancel the pending start; start() will notice this
-        // once its delay finishes and bail out without activating.
-        state.cancelStart = true;
+    function applySettingsToVideo(video, settings) {
+        video.style.setProperty("--oled-safety-margin", settings.safetyMarginPct / 100);
+        video.style.setProperty("--oled-scale-min", settings.scaleMin);
+        video.style.setProperty("--oled-scale-max", settings.scaleMax);
+        video.style.setProperty("--oled-duration-x", `${settings.durationXs}s`);
+        video.style.setProperty("--oled-duration-y", `${settings.durationYs}s`);
+        video.style.setProperty("--oled-duration-scale", `${settings.durationScaleS}s`);
     }
 
-    if (!state.running) {
-        return;
+    function onVideoPause() {
+        if (state.video) {
+            state.video.classList.add("oled-video-paused");
+        }
     }
 
-    document.removeEventListener(
-        "fullscreenchange",
-        onFullscreenChange
-    );
+    function onVideoPlay() {
+        if (state.video) {
+            state.video.classList.remove("oled-video-paused");
+        }
+    }
 
-    document.removeEventListener(
-        "visibilitychange",
-        onVisibilityChange
-    );
+    function attachVideoListeners(video) {
+        video.addEventListener("pause", onVideoPause);
+        video.addEventListener("ended", onVideoPause);
+        video.addEventListener("play", onVideoPlay);
+        video.addEventListener("playing", onVideoPlay);
+    }
 
-    disconnectVideoObserver();
+    function detachVideoListeners(video) {
+        video.removeEventListener("pause", onVideoPause);
+        video.removeEventListener("ended", onVideoPause);
+        video.removeEventListener("play", onVideoPlay);
+        video.removeEventListener("playing", onVideoPlay);
+    }
 
-    if (state.video) {
-        const video = state.video;
-
-        unbindVideo(video);
-
-        // Instantly and fully restore the video — no transition, no
-        // delayed cleanup. Exiting fullscreen already changes the
-        // video's on-screen size/position abruptly on its own, so
-        // easing our own transform back over that same moment only
-        // adds jank. (--oled-x/-y/-scale don't need clearing here:
-        // unbindVideo() already removed the classes that read them, so
-        // they have no effect until the next bind, which starts fresh
-        // animations that override them immediately regardless.)
-        video.style.transform = state.originalTransform;
-        video.style.transformOrigin = state.originalTransformOrigin;
+    function resetVideoStyles(video) {
+        // Unconditionally clear anything a prior run might have left inline,
+        // regardless of how that run ended, so every bind starts from an
+        // identical clean slate. (--oled-x/-y/-scale don't need clearing
+        // here: the drift animations are the only thing that ever touches
+        // them, and they override from their own 0% keyframe the instant
+        // .oled-drift is added, regardless of any leftover value.)
+        video.style.transform = "";
+        video.style.transformOrigin = "";
         video.style.willChange = "";
     }
 
-    state.running = false;
-}
+    function bindVideo(video) {
+        resetVideoStyles(video);
 
-async function startSafely() {
-    try {
-        await start();
-    }
-    catch (error) {
-        console.error(error);
-        alert(error.message);
-    }
-}
+        applySettingsToVideo(video, state.settings);
+        attachVideoListeners(video);
 
-async function onRuntimeMessage(message) {
-    if (message.action === "toggle") {
-        if (state.running || state.starting) {
+        video.classList.add("oled-base");
+        video.classList.toggle("oled-tab-hidden", document.hidden);
+        video.classList.toggle("oled-video-paused", video.paused || video.ended);
+
+        // The infinite drift starts immediately (see content.css) — no JS
+        // timer is involved.
+        video.classList.add("oled-drift");
+    }
+
+    function unbindVideo(video) {
+        detachVideoListeners(video);
+
+        video.classList.remove(
+            "oled-base",
+            "oled-drift",
+            "oled-video-paused",
+            "oled-tab-hidden"
+        );
+    }
+
+    function sleep(ms) {
+        return new Promise(function(resolve) {
+            setTimeout(resolve, ms);
+        });
+    }
+
+    function onFullscreenChange() {
+        if (!document.fullscreenElement) {
             stop();
         }
-        else {
-            await startSafely();
+    }
+
+    function onVisibilityChange() {
+        if (!state.video) {
+            return;
         }
 
-        return;
+        state.video.classList.toggle("oled-tab-hidden", document.hidden);
     }
 
-    if (message.action === "stop") {
-        stop();
-        return;
+    function attachVideoObserver() {
+        disconnectVideoObserver();
+
+        state.videoObserver = new MutationObserver(function() {
+            if (state.videoObserverTimer) {
+                return;
+            }
+
+            // A busy live chat can mutate the page thousands of times.  One
+            // detached-video check per quarter second is enough for replacement.
+            state.videoObserverTimer = setTimeout(function() {
+                state.videoObserverTimer = null;
+                if (state.video && document.contains(state.video)) {
+                    return;
+                }
+
+                try {
+                    findVideo();
+                }
+                catch (error) {
+                    console.warn("[OLED] Video element lost, stopping.", error);
+                    stop();
+                }
+            }, 250);
+        });
+
+        state.videoObserver.observe(document.body, {
+            childList: true,
+            subtree: true
+        });
     }
 
-    if (message.action === "start") {
-        await startSafely();
+    function disconnectVideoObserver() {
+        if (state.videoObserver) {
+            state.videoObserver.disconnect();
+            state.videoObserver = null;
+        }
+
+        if (state.videoObserverTimer) {
+            clearTimeout(state.videoObserverTimer);
+            state.videoObserverTimer = null;
+        }
     }
+
+    async function requestFullscreenWithRetry() {
+        const maxAttempts = 5;
+        const retryDelayMs = 300;
+
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            if (state.startCancelled) {
+                return;
+            }
+
+            try {
+                await document.documentElement.requestFullscreen({
+                    navigationUI: "hide"
+                });
+
+                return;
+            }
+            catch (error) {
+                // Chrome briefly rejects requestFullscreen() right after
+                // exiting fullscreen (anti-flicker/clickjacking cooldown).
+                // Retry a few times before giving up.
+                if (attempt === maxAttempts) {
+                    throw error;
+                }
+
+                await sleep(retryDelayMs);
+            }
+        }
+    }
+
+    async function start() {
+        if (state.phase === PHASE.STARTING) {
+            return;
+        }
+
+        if (state.phase === PHASE.RUNNING) {
+            // A second "start" while already running is a restart request,
+            // not a no-op — tear down cleanly first so the sequence below
+            // runs exactly as it would on a genuine first launch.
+            stop();
+        }
+
+        transition("START");
+        state.startCancelled = false;
+
+        try {
+            findVideo();
+
+            const video = state.video;
+            const enteringFullscreen = !document.fullscreenElement;
+
+            // Hide the video while Chrome does its own native fullscreen-
+            // enter transition — that transition briefly renders the video
+            // at its original size regardless of what CSS we apply, and
+            // nothing in JS/CSS can shorten or skip it. Hiding it means the
+            // first frame the viewer actually sees is already the shrunk,
+            // drifting state, whatever the native transition's timing is.
+            if (enteringFullscreen) {
+                video.style.visibility = "hidden";
+            }
+
+            try {
+                state.settings = await loadSettings();
+
+                if (enteringFullscreen) {
+                    await requestFullscreenWithRetry();
+                }
+
+                if (state.startCancelled || !document.fullscreenElement) {
+                    console.log("[OLED] Start cancelled");
+                    return;
+                }
+
+                document.addEventListener(
+                    "fullscreenchange",
+                    onFullscreenChange
+                );
+
+                document.addEventListener(
+                    "visibilitychange",
+                    onVisibilityChange
+                );
+
+                attachVideoObserver();
+
+                transition("READY");
+
+                bindVideo(video);
+
+                console.log("[OLED] Started");
+            }
+            finally {
+                if (enteringFullscreen) {
+                    video.style.visibility = "";
+                }
+            }
+        }
+        finally {
+            transition("FINISH");
+            state.startCancelled = false;
+        }
+    }
+
+    function stop() {
+        if (state.phase === PHASE.STARTING) {
+            // Cancel the pending start; start() will notice this
+            // once its delay finishes and bail out without activating.
+            state.startCancelled = true;
+        }
+
+        if (state.phase !== PHASE.RUNNING) {
+            return;
+        }
+
+        document.removeEventListener(
+            "fullscreenchange",
+            onFullscreenChange
+        );
+
+        document.removeEventListener(
+            "visibilitychange",
+            onVisibilityChange
+        );
+
+        disconnectVideoObserver();
+
+        if (state.video) {
+            const video = state.video;
+
+            unbindVideo(video);
+
+            // Instantly and fully restore the video — no transition, no
+            // delayed cleanup. Exiting fullscreen already changes the
+            // video's on-screen size/position abruptly on its own, so
+            // easing our own transform back over that same moment only
+            // adds jank. (--oled-x/-y/-scale don't need clearing here:
+            // unbindVideo() already removed the classes that read them, so
+            // they have no effect until the next bind, which starts fresh
+            // animations that override them immediately regardless.)
+            video.style.transform = state.originalTransform;
+            video.style.transformOrigin = state.originalTransformOrigin;
+            video.style.willChange = "";
+        }
+
+        transition("STOP");
+    }
+
+    async function startSafely() {
+        try {
+            await start();
+        }
+        catch (error) {
+            console.error(error);
+            alert(error.message);
+        }
+    }
+
+    async function onRuntimeMessage(message) {
+        if (message.action === OLED_ACTIONS.TOGGLE) {
+            if (state.phase !== PHASE.IDLE) {
+                stop();
+            }
+            else {
+                await startSafely();
+            }
+
+            return;
+        }
+
+        if (message.action === OLED_ACTIONS.STOP) {
+            stop();
+            return;
+        }
+
+        if (message.action === OLED_ACTIONS.START) {
+            await startSafely();
+        }
+    }
+
+    chrome.runtime.onMessage.addListener(
+        onRuntimeMessage
+    );
+
+    window.OLED = {
+        start,
+        stop,
+        version: CONTENT_VERSION,
+        dispose() {
+            stop();
+            chrome.runtime.onMessage.removeListener(onRuntimeMessage);
+            delete window.OLED;
+        }
+    };
 }
-
-chrome.runtime.onMessage.addListener(
-    onRuntimeMessage
-);
-
-window.OLED = {
-    start,
-    stop
-};
