@@ -77,9 +77,9 @@ globalThis.injectAndRun = async function injectAndRun(tabId, action) {
         });
     }
     catch (error) {
-        // Ignore — content.js's own requestFullscreenWithRetry() is a
-        // fallback for exactly this case, just with worse odds since it
-        // runs further from the original gesture.
+        // Ignore — content.js's own requestFullscreenOnce() is a fallback
+        // for exactly this case, just with worse odds since it runs
+        // further from the original gesture.
     }
 
     // Replacing the extension stylesheet keeps repeated toggles from
