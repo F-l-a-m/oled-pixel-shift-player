@@ -4,15 +4,6 @@ chrome.runtime.onInstalled.addListener(() => {
     console.log("OLED Pixel Shift Player installed");
 });
 
-async function injectAndRun(tabId, action) {
-    await chrome.scripting.insertCSS({ target: { tabId }, files: ["content.css"] });
-    await chrome.scripting.executeScript({
-        target: { tabId },
-        files: ["shared.js", "content.js"]
-    });
-    return chrome.tabs.sendMessage(tabId, { action });
-}
-
 async function showError(tabId, error) {
     console.error("[OLED] Failed to reach the page:", error);
     await chrome.action.setBadgeText({ tabId, text: "!" });

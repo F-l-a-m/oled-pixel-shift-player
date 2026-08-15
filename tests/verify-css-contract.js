@@ -3,6 +3,8 @@
 const fs = require("fs");
 const css = fs.readFileSync("content.css", "utf8");
 const js = fs.readFileSync("content.js", "utf8");
+const background = fs.readFileSync("background.js", "utf8");
+const popup = fs.readFileSync("popup/popup.js", "utf8");
 
 const names = [
     "oled-base", "oled-drift", "oled-video-paused", "oled-tab-hidden",
@@ -17,3 +19,17 @@ for (const name of names) {
 }
 
 console.log("CSS contract verified");
+
+for (const source of [background, popup]) {
+    if (!source.includes("removeCSS") || !source.includes("insertCSS")) {
+        throw new Error("Dynamic CSS injection must remove the previous layer first");
+    }
+}
+
+for (const marker of ["PHASE", "requestFullscreen", "return { ok: true", "MutationObserver"]) {
+    if (!js.includes(marker)) {
+        throw new Error(`Runtime contract is missing: ${marker}`);
+    }
+}
+
+console.log("Runtime contract verified");

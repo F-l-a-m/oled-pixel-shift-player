@@ -1,7 +1,7 @@
 initializeOLED();
 
 function initializeOLED() {
-    const CONTENT_VERSION = "0.2.0";
+    const CONTENT_VERSION = "0.2.5";
 
     if (window.OLED?.version === CONTENT_VERSION) {
         return;
@@ -9,31 +9,16 @@ function initializeOLED() {
 
     window.OLED?.dispose?.();
 
-    const DEFAULTS = {
-        scaleMin: 0.63,
-        scaleMax: 0.70,
-
-        // Percent of the viewport we always keep clear at the screen edges,
-        // no matter the scale/offset at any given moment. The max drift
-        // amplitude is derived from this and scaleMax entirely in CSS
-        // (see content.css) — this is what makes the drift safe on any
-        // screen size or aspect ratio without per-screen tuning.
-        safetyMarginPct: 3,
-
-        durationXs: 53,
-        durationYs: 71,
-        durationScaleS: 97
-    };
-
     const state = {
         video: null,
         phase: "IDLE",
         startCancelled: false,
-        settings: { ...DEFAULTS },
+        settings: { ...OLED_DEFAULTS },
         originalTransform: "",
         originalTransformOrigin: "",
         videoObserver: null,
-        videoObserverTimer: null
+        videoObserverTimer: null,
+        videoObserverRoot: null
     };
 
     const PHASE = Object.freeze({ IDLE: "IDLE", STARTING: "STARTING", RUNNING: "RUNNING" });
@@ -42,6 +27,11 @@ function initializeOLED() {
         const transitions = {
             START: { [PHASE.IDLE]: PHASE.STARTING },
             READY: { [PHASE.STARTING]: PHASE.RUNNING },
+            // Only fires if start() exits while still STARTING (cancelled
+            // or failed before reaching RUNNING). Calling this after a
+            // successful start (phase already RUNNING) is a deliberate
+            // no-op: RUNNING isn't a key in this table, so transition()
+            // returns false and leaves the phase untouched.
             FINISH: { [PHASE.STARTING]: PHASE.IDLE },
             STOP: { [PHASE.STARTING]: PHASE.IDLE, [PHASE.RUNNING]: PHASE.IDLE }
         };
@@ -51,11 +41,21 @@ function initializeOLED() {
         return true;
     }
 
+    // Marks an error as an expected, self-recoverable condition (the user
+    // can just try again) rather than a genuine extension bug. startSafely()
+    // uses this to decide whether to log it — logging it at any console
+    // level still shows up in chrome://extensions' Errors page, which
+    // should stay reserved for things that are actually broken.
+    function expected(error) {
+        error.expected = true;
+        return error;
+    }
+
     function findVideo() {
         const video = document.querySelector("video");
 
         if (!video) {
-            throw new Error("No HTML5 video found.");
+            throw expected(new Error("No HTML5 video found."));
         }
 
         if (video === state.video) {
@@ -70,28 +70,19 @@ function initializeOLED() {
         state.originalTransform = video.style.transform;
         state.originalTransformOrigin = video.style.transformOrigin;
 
-        // If we're already running (e.g. the site swapped the <video> element
-        // under us), immediately re-attach the drift effect to the new one.
+        // If we're already running (e.g. the site swapped the <video>
+        // element under us), immediately re-attach the drift effect to the
+        // new one, and re-scope the observer to its (possibly different)
+        // parent so future swaps keep being detected.
         if (state.phase === PHASE.RUNNING) {
             bindVideo(video);
+            attachVideoObserver();
         }
     }
 
     async function loadSettings() {
         const saved = await chrome.storage.local.get("settings");
-        const settings = { ...DEFAULTS, ...saved.settings };
-        const inRange = (value, fallback, min, max) => {
-            const number = Number(value);
-            return Number.isFinite(number) ? Math.min(max, Math.max(min, number)) : fallback;
-        };
-
-        settings.scaleMin = inRange(settings.scaleMin, DEFAULTS.scaleMin, 0.1, 1);
-        settings.scaleMax = Math.max(settings.scaleMin, inRange(settings.scaleMax, DEFAULTS.scaleMax, 0.1, 1));
-        settings.safetyMarginPct = inRange(settings.safetyMarginPct, DEFAULTS.safetyMarginPct, 0, 20);
-        for (const key of ["durationXs", "durationYs", "durationScaleS"]) {
-            settings[key] = Math.max(1, Number(settings[key]) || DEFAULTS[key]);
-        }
-        return settings;
+        return clampOledSettings(saved.settings || {});
     }
 
     function applySettingsToVideo(video, settings) {
@@ -167,12 +158,6 @@ function initializeOLED() {
         );
     }
 
-    function sleep(ms) {
-        return new Promise(function(resolve) {
-            setTimeout(resolve, ms);
-        });
-    }
-
     function onFullscreenChange() {
         if (!document.fullscreenElement) {
             stop();
@@ -213,7 +198,8 @@ function initializeOLED() {
             }, 250);
         });
 
-        state.videoObserver.observe(document.body, {
+        state.videoObserverRoot = state.video?.parentElement || document.body;
+        state.videoObserver.observe(state.videoObserverRoot, {
             childList: true,
             subtree: true
         });
@@ -223,6 +209,7 @@ function initializeOLED() {
         if (state.videoObserver) {
             state.videoObserver.disconnect();
             state.videoObserver = null;
+            state.videoObserverRoot = null;
         }
 
         if (state.videoObserverTimer) {
@@ -231,32 +218,23 @@ function initializeOLED() {
         }
     }
 
-    async function requestFullscreenWithRetry() {
-        const maxAttempts = 5;
-        const retryDelayMs = 300;
-
-        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-            if (state.startCancelled) {
-                return;
-            }
-
-            try {
-                await document.documentElement.requestFullscreen({
-                    navigationUI: "hide"
-                });
-
-                return;
-            }
-            catch (error) {
-                // Chrome briefly rejects requestFullscreen() right after
-                // exiting fullscreen (anti-flicker/clickjacking cooldown).
-                // Retry a few times before giving up.
-                if (attempt === maxAttempts) {
-                    throw error;
-                }
-
-                await sleep(retryDelayMs);
-            }
+    async function requestFullscreenOnce() {
+        try {
+            await document.documentElement.requestFullscreen({
+                navigationUI: "hide"
+            });
+        }
+        catch (error) {
+            // No retry: Chrome's Fullscreen API needs a live transient
+            // user activation, which lasts only a few seconds and is
+            // consumed by other API calls along the way. Retrying with a
+            // delay (the old behavior) only burns further into that same
+            // scarce budget instead of recovering it — it just traded a
+            // fast, clear failure for a slow one. If the user toggled
+            // fullscreen off and back on very quickly (Chrome's brief
+            // anti-flicker cooldown on re-entry), the honest answer is:
+            // wait a moment and press the button/hotkey again.
+            throw expected(new Error("Couldn't enter fullscreen — wait a moment and try again."));
         }
     }
 
@@ -281,22 +259,25 @@ function initializeOLED() {
             const video = state.video;
             const enteringFullscreen = !document.fullscreenElement;
 
-            // Hide the video while Chrome does its own native fullscreen-
-            // enter transition — that transition briefly renders the video
-            // at its original size regardless of what CSS we apply, and
-            // nothing in JS/CSS can shorten or skip it. Hiding it means the
-            // first frame the viewer actually sees is already the shrunk,
-            // drifting state, whatever the native transition's timing is.
-            if (enteringFullscreen) {
-                video.style.visibility = "hidden";
-            }
+            // Hide the video unconditionally — not just when this call is
+            // the one requesting fullscreen. shared.js's injectAndRun()
+            // already requests fullscreen as early as possible (right
+            // after the user gesture, before content.js even loads) to
+            // avoid losing transient activation, so by the time we get
+            // here document.fullscreenElement is very often already true
+            // and enteringFullscreen is false — but Chrome's native
+            // fullscreen-enter transition can still be visually playing
+            // out. Hiding regardless of who requested fullscreen means
+            // the first frame the viewer actually sees is always the
+            // shrunk, drifting state.
+            video.style.visibility = "hidden";
 
             try {
-                state.settings = await loadSettings();
-
                 if (enteringFullscreen) {
-                    await requestFullscreenWithRetry();
+                    await requestFullscreenOnce();
                 }
+
+                state.settings = await loadSettings();
 
                 if (state.startCancelled || !document.fullscreenElement) {
                     console.log("[OLED] Start cancelled");
@@ -322,9 +303,7 @@ function initializeOLED() {
                 console.log("[OLED] Started");
             }
             finally {
-                if (enteringFullscreen) {
-                    video.style.visibility = "";
-                }
+                video.style.visibility = "";
             }
         }
         finally {
@@ -380,33 +359,59 @@ function initializeOLED() {
     async function startSafely() {
         try {
             await start();
+            return { ok: true };
         }
         catch (error) {
-            console.error(error);
-            alert(error.message);
+            // No blocking dialog here: this response is delivered back to
+            // whoever sent the message (popup or the command handler),
+            // and they already surface {ok:false, error} to the user. A
+            // blocking dialog in the page would also freeze the sender's
+            // await on sendMessage until someone dismissed it.
+            //
+            // Only log genuinely unexpected errors. chrome://extensions'
+            // Errors page captures console.warn just as much as
+            // console.error — severity alone doesn't keep an expected,
+            // self-recoverable condition (no video found, couldn't enter
+            // fullscreen) out of it, so those are skipped entirely rather
+            // than merely downgraded. That page should stay reserved for
+            // things that are actually broken.
+            if (!error.expected) {
+                console.warn(error);
+            }
+            return { ok: false, error: error.message };
         }
     }
 
-    async function onRuntimeMessage(message) {
+    function onRuntimeMessage(message, sender, sendResponse) {
+        let operation;
+
         if (message.action === OLED_ACTIONS.TOGGLE) {
             if (state.phase !== PHASE.IDLE) {
                 stop();
+                sendResponse({ ok: true, state: state.phase });
+                return false;
             }
-            else {
-                await startSafely();
-            }
-
-            return;
+            operation = startSafely();
         }
 
-        if (message.action === OLED_ACTIONS.STOP) {
+        else if (message.action === OLED_ACTIONS.STOP) {
             stop();
-            return;
+            sendResponse({ ok: true, state: state.phase });
+            return false;
+        }
+        else if (message.action === OLED_ACTIONS.START) {
+            operation = startSafely();
         }
 
-        if (message.action === OLED_ACTIONS.START) {
-            await startSafely();
+        else {
+            sendResponse({ ok: false, error: "Unknown action" });
+            return false;
         }
+
+        operation.then(sendResponse).catch(function(error) {
+            sendResponse({ ok: false, error: error.message });
+        });
+        return true;
     }
 
     chrome.runtime.onMessage.addListener(
