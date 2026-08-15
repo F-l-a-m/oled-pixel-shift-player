@@ -1,0 +1,15 @@
+# Normalize line endings for everyone, regardless of OS or local git
+# config (core.autocrlf). Without this, Windows checkouts show every
+# text file as "modified" on a fresh clone/pull even when the content
+# is byte-identical — only the line endings differ.
+* text=auto eol=lf
+
+# Explicit for clarity; these are all plain text and should stay LF.
+*.js text eol=lf
+*.json text eol=lf
+*.css text eol=lf
+*.html text eol=lf
+*.md text eol=lf
+
+# Binary-ish or license/text files that don't need line-ending rewriting.
+LICENSE text eol=lf
