@@ -1,7 +1,7 @@
 initializeOLED();
 
 function initializeOLED() {
-    const CONTENT_VERSION = "0.2.5";
+    const CONTENT_VERSION = "0.2.7";
 
     if (window.OLED?.version === CONTENT_VERSION) {
         return;
@@ -218,22 +218,48 @@ function initializeOLED() {
         }
     }
 
-    async function requestFullscreenOnce() {
+    function sleep(ms) {
+        return new Promise(function(resolve) {
+            setTimeout(resolve, ms);
+        });
+    }
+
+    async function requestFullscreenWithRetry() {
+        // Exactly one retry, with a deliberate pause — not the old
+        // aggressive 5-attempt/300ms loop we removed in 0.2.3. That
+        // change assumed any retry just burns further into the scarce
+        // transient-activation budget with no upside; in practice, real
+        // use (exiting fullscreen via Escape, then toggling back on
+        // shortly after) hits Chrome's brief anti-flicker cooldown on
+        // fullscreen re-entry often enough that a single wait-and-retry
+        // is worth it. The exact delay is a best-effort guess — Chrome
+        // doesn't document this cooldown's length — and may need tuning.
+        const retryDelayMs = 800;
+
+        try {
+            await document.documentElement.requestFullscreen({
+                navigationUI: "hide"
+            });
+            return;
+        }
+        catch (error) {
+            if (state.startCancelled) {
+                return;
+            }
+
+            await sleep(retryDelayMs);
+
+            if (state.startCancelled) {
+                return;
+            }
+        }
+
         try {
             await document.documentElement.requestFullscreen({
                 navigationUI: "hide"
             });
         }
         catch (error) {
-            // No retry: Chrome's Fullscreen API needs a live transient
-            // user activation, which lasts only a few seconds and is
-            // consumed by other API calls along the way. Retrying with a
-            // delay (the old behavior) only burns further into that same
-            // scarce budget instead of recovering it — it just traded a
-            // fast, clear failure for a slow one. If the user toggled
-            // fullscreen off and back on very quickly (Chrome's brief
-            // anti-flicker cooldown on re-entry), the honest answer is:
-            // wait a moment and press the button/hotkey again.
             throw expected(new Error("Couldn't enter fullscreen — wait a moment and try again."));
         }
     }
@@ -274,7 +300,7 @@ function initializeOLED() {
 
             try {
                 if (enteringFullscreen) {
-                    await requestFullscreenOnce();
+                    await requestFullscreenWithRetry();
                 }
 
                 state.settings = await loadSettings();

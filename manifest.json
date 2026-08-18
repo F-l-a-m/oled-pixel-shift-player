@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "OLED Pixel Shift Player",
-  "version": "0.2.5",
+  "version": "0.2.8",
   "minimum_chrome_version": "88",
   "description": "Reduce OLED burn-in by slowly and continuously shifting HTML5 video position and scale in fullscreen.",
 

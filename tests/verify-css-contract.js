@@ -1,101 +1,94 @@
-// Shared message names, default settings, settings validation and the
-// injection helper for the popup, service worker and injected content
-// script. Single source of truth so the three contexts can't drift apart.
+// Lightweight regression check for the JS <-> CSS names.  It needs no test
+// framework and can run with: node tests/verify-css-contract.js
+const fs = require("fs");
+const css = fs.readFileSync("content.css", "utf8");
+const js = fs.readFileSync("content.js", "utf8");
+const shared = fs.readFileSync("shared.js", "utf8");
+const background = fs.readFileSync("background.js", "utf8");
+const popup = fs.readFileSync("popup/popup.js", "utf8");
 
-globalThis.OLED_ACTIONS = Object.freeze({
-    REQUEST: "oled-request",
-    START: "start",
-    STOP: "stop",
-    TOGGLE: "toggle"
-});
+const names = [
+    "oled-base", "oled-drift", "oled-video-paused", "oled-tab-hidden",
+    "--oled-safety-margin", "--oled-scale-min", "--oled-scale-max",
+    "--oled-duration-x", "--oled-duration-y", "--oled-duration-scale"
+];
 
-globalThis.OLED_DEFAULTS = Object.freeze({
-    scaleMin: 0.63,
-    scaleMax: 0.70,
-
-    // Percent of the viewport we always keep clear at the screen edges,
-    // no matter the scale/offset at any given moment. The max drift
-    // amplitude is derived from this and scaleMax entirely in CSS
-    // (see content.css) — this is what makes the drift safe on any
-    // screen size or aspect ratio without per-screen tuning.
-    safetyMarginPct: 3,
-
-    durationXs: 53,
-    durationYs: 71,
-    durationScaleS: 97
-});
-
-// Clamps arbitrary/untrusted settings (from chrome.storage, or a settings
-// form) into safe ranges. Used by content.js when reading settings and by
-// popup.js when displaying/saving them, so the UI never shows a value that
-// differs from what actually gets applied.
-globalThis.clampOledSettings = function clampOledSettings(rawSettings) {
-    const settings = { ...OLED_DEFAULTS, ...rawSettings };
-
-    const inRange = (value, fallback, min, max) => {
-        const number = Number(value);
-        return Number.isFinite(number) ? Math.min(max, Math.max(min, number)) : fallback;
-    };
-
-    settings.scaleMin = inRange(settings.scaleMin, OLED_DEFAULTS.scaleMin, 0.1, 1);
-    settings.scaleMax = Math.max(settings.scaleMin, inRange(settings.scaleMax, OLED_DEFAULTS.scaleMax, 0.1, 1));
-    settings.safetyMarginPct = inRange(settings.safetyMarginPct, OLED_DEFAULTS.safetyMarginPct, 0, 20);
-
-    for (const key of ["durationXs", "durationYs", "durationScaleS"]) {
-        settings[key] = inRange(settings[key], OLED_DEFAULTS[key], 1, 3600);
+for (const name of names) {
+    if (!css.includes(name) || !js.includes(name)) {
+        throw new Error(`CSS contract is out of sync: ${name}`);
     }
+}
 
-    return settings;
-};
+console.log("CSS contract verified");
 
-// Ensures content.css/content.js are present on the tab and delivers the
-// given action. Idempotent — content.js's own version guard absorbs
-// repeat injection, and the CSS layer is replaced (not stacked) on every
-// call. Shared by the popup button and the keyboard-shortcut command
-// handler so the two entry points can't quietly diverge.
-globalThis.injectAndRun = async function injectAndRun(tabId, action) {
-    // Request fullscreen as the very first thing we do, before any other
-    // async work. Chrome's transient user activation (required by the
-    // Fullscreen API) lasts only a few seconds after a click/keypress and
-    // can be consumed by other API calls along the way — removeCSS,
-    // insertCSS, loading content.js and a message round-trip are all
-    // async hops that eat into that budget before content.js would
-    // otherwise get a chance to request it itself, especially on a heavy
-    // page. Checking document.fullscreenElement doubles as a cheap
-    // start-vs-stop guess: if we're already fullscreen, this is a stop
-    // request and nothing should be requested.
-    try {
-        await chrome.scripting.executeScript({
-            target: { tabId },
-            func: () => {
-                if (!document.fullscreenElement) {
-                    return document.documentElement
-                        .requestFullscreen({ navigationUI: "hide" })
-                        .catch(() => {});
-                }
-            }
-        });
+// Dynamic CSS injection must remove the previous layer first — that logic
+// lives once in shared.js; background.js and popup.js must delegate to it
+// rather than duplicating (and potentially diverging from) it.
+if (!shared.includes("removeCSS") || !shared.includes("insertCSS")) {
+    throw new Error("shared.js must remove the previous CSS layer before inserting a new one");
+}
+
+// Only background.js calls injectAndRun directly — its own context isn't
+// tied to the popup's lifetime. popup.js must relay through it instead of
+// calling injectAndRun itself: Chrome closes the popup automatically the
+// instant the target tab enters fullscreen (which injectAndRun's very
+// first step triggers), which would abort an in-flight call running in
+// the popup's own short-lived context before content.js ever loaded.
+if (!background.includes("injectAndRun")) {
+    throw new Error("background.js must call shared.js's injectAndRun");
+}
+
+if (popup.includes("injectAndRun")) {
+    throw new Error("popup.js must not call injectAndRun directly — the popup can close mid-flight (e.g. on fullscreen entry) and abort it. Relay through the background script instead.");
+}
+
+if (!popup.includes("OLED_ACTIONS.REQUEST") || !popup.includes("sendMessage")) {
+    throw new Error("popup.js must relay the toggle to the background script via OLED_ACTIONS.REQUEST");
+}
+
+if (!background.includes("OLED_ACTIONS.REQUEST")) {
+    throw new Error("background.js must handle OLED_ACTIONS.REQUEST from the popup");
+}
+
+// The fullscreen request itself must additionally be called directly in
+// popup.js, not only via the relay: chrome.commands (the keyboard
+// shortcut) carries Chrome's gesture recognition through to the
+// background script automatically, but a chrome.runtime.sendMessage
+// relay from the popup does not, so popup-triggered fullscreen requests
+// need to happen in the popup's own click-handler context to have a
+// realistic chance of succeeding.
+if (!shared.includes("requestFullscreenIfNeeded")) {
+    throw new Error("shared.js must define requestFullscreenIfNeeded so popup.js can call it directly");
+}
+
+if (!popup.includes("requestFullscreenIfNeeded")) {
+    throw new Error("popup.js must call requestFullscreenIfNeeded directly in its click handler, not only via the background relay");
+}
+
+// Settings validation must also live once in shared.js and be used by both
+// the runtime (content.js) and the settings form (popup.js), so the UI can
+// never show a value that differs from what actually gets applied.
+if (!shared.includes("clampOledSettings")) {
+    throw new Error("shared.js must define clampOledSettings");
+}
+
+for (const source of [js, popup]) {
+    if (!source.includes("clampOledSettings")) {
+        throw new Error("content.js and popup.js must both use clampOledSettings");
     }
-    catch (error) {
-        // Ignore — content.js's own requestFullscreenOnce() is a fallback
-        // for exactly this case, just with worse odds since it runs
-        // further from the original gesture.
-    }
+}
 
-    // Replacing the extension stylesheet keeps repeated toggles from
-    // accumulating identical CSS layers in the tab.
-    try {
-        await chrome.scripting.removeCSS({ target: { tabId }, files: ["content.css"] });
+for (const marker of ["PHASE", "requestFullscreen", "return { ok: true", "MutationObserver"]) {
+    if (!js.includes(marker)) {
+        throw new Error(`Runtime contract is missing: ${marker}`);
     }
-    catch (error) {
-        // The first run has nothing to remove.
-    }
+}
 
-    await chrome.scripting.insertCSS({ target: { tabId }, files: ["content.css"] });
-    await chrome.scripting.executeScript({
-        target: { tabId },
-        files: ["shared.js", "content.js"]
-    });
+// A blocking alert() in the content script would freeze whoever is
+// awaiting the sendMessage response (popup or the command handler) until
+// a human dismisses a dialog they may not even see.
+if (js.includes("alert(")) {
+    throw new Error("content.js must not call alert() — surface errors via the {ok:false, error} response instead");
+}
 
-    return chrome.tabs.sendMessage(tabId, { action });
-};
+console.log("Runtime contract verified");

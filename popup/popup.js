@@ -8,12 +8,33 @@ async function getActiveTabId() {
 }
 
 startButton.addEventListener("click", async () => {
-    const tabId = await getActiveTabId();
-    if (!tabId) return;
-
     startButton.disabled = true;
+
+    // Request fullscreen directly here, in the click handler itself —
+    // the closest point to the actual user gesture, and the only one
+    // Chrome reliably treats as gesture-backed for this popup. Relaying
+    // it through the background script (like everything else below)
+    // loses that recognition: chrome.commands (the keyboard shortcut)
+    // carries it through automatically, but a generic runtime message
+    // from the popup does not. Fired without awaiting it — entering
+    // fullscreen closes this popup, and blocking here risks the popup
+    // closing before the relay message below even gets sent.
+    const tabId = await getActiveTabId();
+
+    if (tabId) {
+        requestFullscreenIfNeeded(tabId).catch(() => {
+            // Ignore — the relay below and content.js's own
+            // requestFullscreenWithRetry() are still there as fallbacks.
+        });
+    }
+
     try {
-        const response = await injectAndRun(tabId, OLED_ACTIONS.TOGGLE);
+        // Relayed to the background script rather than doing the rest of
+        // the injection here directly: it isn't tied to the popup's
+        // lifetime, so it completes even if the popup has already closed
+        // by the time it runs — we just might not be around to show the
+        // result in that case.
+        const response = await chrome.runtime.sendMessage({ action: OLED_ACTIONS.REQUEST });
         status.textContent = response?.ok ? "Done" : (response?.error || "Couldn't run on this page");
     }
     catch (error) {
