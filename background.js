@@ -16,15 +16,28 @@ async function toggleActiveTab() {
         return { ok: false, error: "No active tab" };
     }
 
+    let response;
     try {
-        const response = await injectAndRun(tab.id, OLED_ACTIONS.TOGGLE);
-        await chrome.action.setBadgeText({ tabId: tab.id, text: "" });
-        return response;
+        response = await injectAndRun(tab.id, OLED_ACTIONS.TOGGLE);
     }
     catch (error) {
-        await showError(tab.id, error);
-        return { ok: false, error: error.message };
+        response = { ok: false, error: error.message };
     }
+
+    // The hotkey has no feedback channel besides this badge (unlike the
+    // popup, which also has its own #status text) — a returned
+    // {ok:false} (e.g. no video found, couldn't enter fullscreen) needs
+    // to show up here just as much as a thrown exception does, or a
+    // hotkey press that "does nothing" is indistinguishable from one
+    // that quietly failed.
+    if (response?.ok) {
+        await chrome.action.setBadgeText({ tabId: tab.id, text: "" });
+    }
+    else {
+        await showError(tab.id, new Error(response?.error || "Unknown error"));
+    }
+
+    return response;
 }
 
 // Guards against overlapping command invocations. Pressing the hotkey

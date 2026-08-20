@@ -1,7 +1,7 @@
 initializeOLED();
 
 function initializeOLED() {
-    const CONTENT_VERSION = "0.2.7";
+    const CONTENT_VERSION = "0.2.10";
 
     if (window.OLED?.version === CONTENT_VERSION) {
         return;
@@ -51,8 +51,25 @@ function initializeOLED() {
         return error;
     }
 
-    function findVideo() {
-        const video = document.querySelector("video");
+    async function findVideo() {
+        let video = document.querySelector("video");
+
+        if (!video) {
+            // Right after entering fullscreen, some sites (YouTube in
+            // particular) briefly restructure their player DOM in
+            // reaction to the fullscreenchange event — which can make
+            // the video element momentarily unavailable exactly when
+            // this runs, especially the closer this call is to the
+            // fullscreen request itself. Give it a short chance to
+            // reappear before giving up. Total worst case: ~800ms.
+            const maxAttempts = 5;
+            const retryDelayMs = 200;
+
+            for (let attempt = 1; attempt < maxAttempts && !video; attempt++) {
+                await sleep(retryDelayMs);
+                video = document.querySelector("video");
+            }
+        }
 
         if (!video) {
             throw expected(new Error("No HTML5 video found."));
@@ -188,13 +205,10 @@ function initializeOLED() {
                     return;
                 }
 
-                try {
-                    findVideo();
-                }
-                catch (error) {
+                findVideo().catch(function(error) {
                     console.warn("[OLED] Video element lost, stopping.", error);
                     stop();
-                }
+                });
             }, 250);
         });
 
@@ -280,7 +294,7 @@ function initializeOLED() {
         state.startCancelled = false;
 
         try {
-            findVideo();
+            await findVideo();
 
             const video = state.video;
             const enteringFullscreen = !document.fullscreenElement;
