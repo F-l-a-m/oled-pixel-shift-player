@@ -408,7 +408,7 @@ function initializeOLED() {
             if (!error.expected) {
                 console.warn(error);
             }
-            return { ok: false, error: error.message };
+            return { ok: false, error: error.message, expected: Boolean(error.expected) };
         }
     }
 

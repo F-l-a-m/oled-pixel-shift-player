@@ -125,6 +125,22 @@ for (const marker of ["OLED_PHASE", "requestFullscreen", "return { ok: true", "M
     }
 }
 
+// content.js marks self-recoverable failures (no video found, couldn't
+// enter fullscreen) via its own expected() helper so it knows not to log
+// them — but that flag lives on a local Error object and doesn't survive
+// crossing the sendMessage boundary unless explicitly included in the
+// response. background.js's showError() must honor it (skip
+// console.error, still show the badge) or the same class of noise
+// content.js deliberately avoids reappears one layer up, in the
+// extension's own Errors page.
+if (!js.includes("expected: Boolean(error.expected)")) {
+    throw new Error("content.js's startSafely() must include the expected flag in its {ok:false} response, not just the error message");
+}
+
+if (!background.includes("response?.expected") && !background.includes("response.expected")) {
+    throw new Error("background.js must check response.expected before logging a returned failure as a console error");
+}
+
 // A blocking alert() in the content script would freeze whoever is
 // awaiting the sendMessage response (popup or the command handler) until
 // a human dismisses a dialog they may not even see.

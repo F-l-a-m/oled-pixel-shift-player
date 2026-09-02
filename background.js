@@ -4,8 +4,10 @@ chrome.runtime.onInstalled.addListener(() => {
     console.log("OLED Pixel Shift Player installed");
 });
 
-async function showError(tabId, error) {
-    console.error("[OLED] Failed to reach the page:", error);
+async function showError(tabId, error, { silent = false } = {}) {
+    if (!silent) {
+        console.error("[OLED] Failed to reach the page:", error);
+    }
     await chrome.action.setBadgeText({ tabId, text: "!" });
     await chrome.action.setBadgeBackgroundColor({ tabId, color: "#c62828" });
 }
@@ -34,7 +36,20 @@ async function toggleActiveTab() {
         await chrome.action.setBadgeText({ tabId: tab.id, text: "" });
     }
     else {
-        await showError(tab.id, new Error(response?.error || "Unknown error"));
+        // response.expected (set by content.js's own expected() marker,
+        // for conditions like "couldn't enter fullscreen — try again")
+        // still shows the badge, but skips console.error: that's the
+        // same choice content.js already makes for these — they're
+        // self-recoverable, not a sign anything's actually broken, and
+        // chrome://extensions' Errors page should stay reserved for the
+        // latter. A response from injectAndRun() throwing (caught above)
+        // has no such flag and is logged normally, since that path
+        // represents an unexpected failure in the extension itself.
+        await showError(
+            tab.id,
+            new Error(response?.error || "Unknown error"),
+            { silent: Boolean(response?.expected) }
+        );
     }
 
     return response;
