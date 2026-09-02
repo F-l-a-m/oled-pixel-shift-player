@@ -39,7 +39,7 @@ chrome://extensions
 5. Select the project folder.
 
 After changing files, click the reload button for the extension and refresh the
-video page. Check that Chrome shows version 0.2.10 before testing.
+video page.
 
 ## Usage
 
@@ -52,8 +52,9 @@ video page. Check that Chrome shows version 0.2.10 before testing.
 
 ## Current status
 
-Version 0.2.10. Requires Chrome 88 or newer (the extension uses the
-`chrome.scripting` API, which isn't available before Chrome 88).
+See `manifest.json` for the current version. Requires Chrome 88 or newer
+(the extension uses the `chrome.scripting` API, which isn't available
+before Chrome 88).
 
 For a quick code check, run `node tests/verify-css-contract.js` from the
 project folder.

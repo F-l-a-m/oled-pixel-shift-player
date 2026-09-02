@@ -1,7 +1,7 @@
 initializeOLED();
 
 function initializeOLED() {
-    const CONTENT_VERSION = "0.2.10";
+    const CONTENT_VERSION = chrome.runtime.getManifest().version;
 
     if (window.OLED?.version === CONTENT_VERSION) {
         return;
@@ -11,7 +11,7 @@ function initializeOLED() {
 
     const state = {
         video: null,
-        phase: "IDLE",
+        phase: OLED_PHASE.IDLE,
         startCancelled: false,
         settings: { ...OLED_DEFAULTS },
         originalTransform: "",
@@ -21,21 +21,11 @@ function initializeOLED() {
         videoObserverRoot: null
     };
 
-    const PHASE = Object.freeze({ IDLE: "IDLE", STARTING: "STARTING", RUNNING: "RUNNING" });
-
+    // The transition table itself lives in shared-constants.js as a pure,
+    // unit-testable reducer (nextOledPhase); this just applies its result
+    // to our own mutable state.
     function transition(event) {
-        const transitions = {
-            START: { [PHASE.IDLE]: PHASE.STARTING },
-            READY: { [PHASE.STARTING]: PHASE.RUNNING },
-            // Only fires if start() exits while still STARTING (cancelled
-            // or failed before reaching RUNNING). Calling this after a
-            // successful start (phase already RUNNING) is a deliberate
-            // no-op: RUNNING isn't a key in this table, so transition()
-            // returns false and leaves the phase untouched.
-            FINISH: { [PHASE.STARTING]: PHASE.IDLE },
-            STOP: { [PHASE.STARTING]: PHASE.IDLE, [PHASE.RUNNING]: PHASE.IDLE }
-        };
-        const next = transitions[event]?.[state.phase];
+        const next = nextOledPhase(state.phase, event);
         if (!next) return false;
         state.phase = next;
         return true;
@@ -91,7 +81,7 @@ function initializeOLED() {
         // element under us), immediately re-attach the drift effect to the
         // new one, and re-scope the observer to its (possibly different)
         // parent so future swaps keep being detected.
-        if (state.phase === PHASE.RUNNING) {
+        if (state.phase === OLED_PHASE.RUNNING) {
             bindVideo(video);
             attachVideoObserver();
         }
@@ -279,11 +269,11 @@ function initializeOLED() {
     }
 
     async function start() {
-        if (state.phase === PHASE.STARTING) {
+        if (state.phase === OLED_PHASE.STARTING) {
             return;
         }
 
-        if (state.phase === PHASE.RUNNING) {
+        if (state.phase === OLED_PHASE.RUNNING) {
             // A second "start" while already running is a restart request,
             // not a no-op — tear down cleanly first so the sequence below
             // runs exactly as it would on a genuine first launch.
@@ -353,13 +343,13 @@ function initializeOLED() {
     }
 
     function stop() {
-        if (state.phase === PHASE.STARTING) {
+        if (state.phase === OLED_PHASE.STARTING) {
             // Cancel the pending start; start() will notice this
             // once its delay finishes and bail out without activating.
             state.startCancelled = true;
         }
 
-        if (state.phase !== PHASE.RUNNING) {
+        if (state.phase !== OLED_PHASE.RUNNING) {
             return;
         }
 
@@ -426,7 +416,7 @@ function initializeOLED() {
         let operation;
 
         if (message.action === OLED_ACTIONS.TOGGLE) {
-            if (state.phase !== PHASE.IDLE) {
+            if (state.phase !== OLED_PHASE.IDLE) {
                 stop();
                 sendResponse({ ok: true, state: state.phase });
                 return false;

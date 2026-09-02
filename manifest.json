@@ -1,9 +1,16 @@
 {
   "manifest_version": 3,
   "name": "OLED Pixel Shift Player",
-  "version": "0.2.10",
+  "version": "0.3.0",
   "minimum_chrome_version": "88",
   "description": "Reduce OLED burn-in by slowly and continuously shifting HTML5 video position and scale in fullscreen.",
+
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
 
   "permissions": [
     "storage",
@@ -12,7 +19,13 @@
   ],
 
   "action": {
-    "default_popup": "popup/popup.html"
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
   },
 
   "commands": {

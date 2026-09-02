@@ -1,52 +1,10 @@
-// Shared message names, default settings, settings validation and the
-// injection helper for the popup, service worker and injected content
-// script. Single source of truth so the three contexts can't drift apart.
-
-globalThis.OLED_ACTIONS = Object.freeze({
-    REQUEST: "oled-request",
-    START: "start",
-    STOP: "stop",
-    TOGGLE: "toggle"
-});
-
-globalThis.OLED_DEFAULTS = Object.freeze({
-    scaleMin: 0.63,
-    scaleMax: 0.70,
-
-    // Percent of the viewport we always keep clear at the screen edges,
-    // no matter the scale/offset at any given moment. The max drift
-    // amplitude is derived from this and scaleMax entirely in CSS
-    // (see content.css) — this is what makes the drift safe on any
-    // screen size or aspect ratio without per-screen tuning.
-    safetyMarginPct: 3,
-
-    durationXs: 53,
-    durationYs: 71,
-    durationScaleS: 97
-});
-
-// Clamps arbitrary/untrusted settings (from chrome.storage, or a settings
-// form) into safe ranges. Used by content.js when reading settings and by
-// popup.js when displaying/saving them, so the UI never shows a value that
-// differs from what actually gets applied.
-globalThis.clampOledSettings = function clampOledSettings(rawSettings) {
-    const settings = { ...OLED_DEFAULTS, ...rawSettings };
-
-    const inRange = (value, fallback, min, max) => {
-        const number = Number(value);
-        return Number.isFinite(number) ? Math.min(max, Math.max(min, number)) : fallback;
-    };
-
-    settings.scaleMin = inRange(settings.scaleMin, OLED_DEFAULTS.scaleMin, 0.1, 1);
-    settings.scaleMax = Math.max(settings.scaleMin, inRange(settings.scaleMax, OLED_DEFAULTS.scaleMax, 0.1, 1));
-    settings.safetyMarginPct = inRange(settings.safetyMarginPct, OLED_DEFAULTS.safetyMarginPct, 0, 20);
-
-    for (const key of ["durationXs", "durationYs", "durationScaleS"]) {
-        settings[key] = inRange(settings[key], OLED_DEFAULTS[key], 1, 3600);
-    }
-
-    return settings;
-};
+// Helpers that require chrome.scripting — usable only from the
+// background service worker and the popup, both of which have that API.
+// Never load this in the injected content script: it runs in the page's
+// isolated world, which has no access to chrome.scripting at all, so
+// anything defined here would just be dead code that fails if called.
+// See shared-constants.js for what's safe to load everywhere, including
+// the content script.
 
 // Requests fullscreen on the tab if it isn't already, doing nothing
 // otherwise (a cheap stand-in for "is this a start or a stop"). Exposed
@@ -107,7 +65,10 @@ globalThis.injectAndRun = async function injectAndRun(tabId, action) {
     await chrome.scripting.insertCSS({ target: { tabId }, files: ["content.css"] });
     await chrome.scripting.executeScript({
         target: { tabId },
-        files: ["shared.js", "content.js"]
+        // Only shared-constants.js — never shared-background.js, which
+        // would be dead weight (and a confusing false suggestion of
+        // capability) in the page's isolated world.
+        files: ["shared-constants.js", "content.js"]
     });
 
     return chrome.tabs.sendMessage(tabId, { action });

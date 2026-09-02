@@ -1,4 +1,4 @@
-importScripts("shared.js");
+importScripts("shared-constants.js", "shared-background.js");
 
 chrome.runtime.onInstalled.addListener(() => {
     console.log("OLED Pixel Shift Player installed");
